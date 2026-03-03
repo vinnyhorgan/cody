@@ -1,6 +1,6 @@
 # CLAUDE.md — Cody Development Guide
 
-Cody is a personal AI assistant that connects Telegram to an OpenAI-compatible LLM (gpt-oss-120b via OpenRouter). It is a Go source port of [nanobot](https://github.com/nano-bot/nanobot), stripped to only support Telegram + OpenRouter. The entire codebase is a single flat Go package (`package main`) in the repository root.
+Cody is a personal AI assistant that connects Telegram to an OpenAI-compatible LLM, with a default target of Cerebras + `gpt-oss-120b`. It is a Go source port of [nanobot](https://github.com/nano-bot/nanobot), intentionally narrowed to Telegram-only runtime behavior. The entire codebase is a single flat Go package (`package main`) in the repository root.
 
 ## Build & Run
 
@@ -33,7 +33,7 @@ go tool cover -func=c.out                                   # per-function cover
 
 The `-tags testcoverage` build tag excludes `main.go` from coverage measurement since its functions (`main`, `runGateway`, `runOnboard`) call `os.Exit` and start real services, making them untestable. Without the tag, all tests still pass — coverage just reports lower because those functions count as uncovered.
 
-**Current stats:** 319 tests, 90.2% coverage, 0 race conditions.
+Run `go test ./...` and `make` for the current test/build status.
 
 ## Project Layout
 
@@ -75,7 +75,7 @@ Telegram → TelegramBot.handleMessage() → MessageBus.Inbound
   → AgentLoop.run() → dispatch() → processMessage()
     → ContextBuilder.buildMessages() (system prompt + history + user msg)
     → AgentLoop.runLoop() (up to 40 LLM iterations)
-      → LLMClient.chat() → OpenRouter API
+      → LLMClient.chat() → configured OpenAI-compatible API
       → if tool_calls: ToolRegistry.execute() → loop again
       → if text: return response
     → save session, check memory consolidation
@@ -105,10 +105,10 @@ Telegram → TelegramBot.handleMessage() → MessageBus.Inbound
 
 | Tool         | Purpose                                                          |
 | ------------ | ---------------------------------------------------------------- |
-| `read_file`  | Read file with optional line range                               |
+| `read_file`  | Read full file contents                                          |
 | `write_file` | Create or overwrite file                                         |
 | `edit_file`  | Exact string replacement (shows close match on failure)          |
-| `list_dir`   | Tree listing (configurable depth, default 2)                     |
+| `list_dir`   | List immediate directory contents                                |
 | `exec`       | Run bash command (60s timeout, dangerous pattern blocking)       |
 | `web_search` | Brave Search API (needs BRAVE_API_KEY)                           |
 | `web_fetch`  | Fetch URL, extract text via readability (1MB limit, 5 redirects) |
@@ -212,7 +212,7 @@ When unconsolidated message count exceeds `agent.memory_window` (default 100), t
 Cody is a behavioral clone of nanobot configured with:
 
 - Channel: Telegram only
-- LLM provider: OpenRouter (OpenAI-compatible) with gpt-oss-120b (text-to-text only — no vision/image input)
+- LLM profile: Cerebras/OpenAI-compatible endpoint with `gpt-oss-120b` (text-only)
 - All agent harness logic, prompt templates, tool schemas, memory consolidation, cron/heartbeat, and subagent spawning match nanobot's behavior exactly
 
 Differences from nanobot:
@@ -223,8 +223,8 @@ Differences from nanobot:
 - No support for Anthropic/Google/other non-OpenAI-compatible APIs
 - Single binary deployment (no Python runtime needed)
 - No MCP (Model Context Protocol) server integration
-- No image/vision input to LLM (gpt-oss-120b is text-only; photos are rejected with a text-only notice, captions are still processed)
+- No image/vision input to LLM (gpt-oss-120b is text-only; photo captions are processed as text)
 - No OAuth-based provider login (OpenAI Codex, GitHub Copilot)
 - No gateway HTTP server (nanobot exposes port 18790)
 - No LiteLLM routing layer (direct OpenAI-compatible HTTP only)
-- No prompt caching optimization (Anthropic/OpenRouter cache_control)
+- No prompt caching optimization layer

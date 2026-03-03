@@ -360,7 +360,7 @@ func TestContextBuilderBuildMessages(t *testing.T) {
 		{Role: "assistant", Content: "previous response"},
 	}
 
-	msgs := cb.buildMessages(history, "new message", nil, "", "")
+	msgs := cb.buildMessages(history, "new message", "", "")
 
 	// Should have: system + history(2) + runtime system + user = 5
 	if len(msgs) != 5 {
@@ -379,14 +379,13 @@ func TestContextBuilderBuildMessages(t *testing.T) {
 	}
 }
 
-func TestContextBuilderWithMedia(t *testing.T) {
+func TestContextBuilderTextOnlyInput(t *testing.T) {
 	dir := t.TempDir()
 	ms := newMemoryStore(dir)
 	sl := newSkillsLoader(dir)
 	cb := newContextBuilder(dir, ms, sl)
 
-	media := []Media{{Type: "image", URL: "https://example.com/img.jpg"}}
-	msgs := cb.buildMessages(nil, "check this image", media, "", "")
+	msgs := cb.buildMessages(nil, "check this image", "", "")
 
 	lastMsg := msgs[len(msgs)-1]
 	if lastMsg.Role != "user" {
@@ -416,37 +415,6 @@ func TestStripThinkBlocks(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("stripThinkBlocks(%q) = %q, want %q", tc.in, got, tc.want)
 		}
-	}
-}
-
-func TestStripBase64Images(t *testing.T) {
-	// Non-multimodal content should pass through unchanged.
-	if got := stripBase64Images("hello"); got != "hello" {
-		t.Errorf("expected string passthrough, got %v", got)
-	}
-
-	// Multimodal content with base64 image should be replaced.
-	input := []any{
-		map[string]any{"type": "text", "text": "caption"},
-		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,abc123"}},
-		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/photo.jpg"}},
-	}
-	result := stripBase64Images(input).([]any)
-	if len(result) != 3 {
-		t.Fatalf("expected 3 parts, got %d", len(result))
-	}
-	// First part unchanged (text)
-	if result[0].(map[string]any)["type"] != "text" {
-		t.Error("first part should be text")
-	}
-	// Second part should be replaced with [image] stub
-	stub := result[1].(map[string]any)
-	if stub["type"] != "text" || stub["text"] != "[image]" {
-		t.Errorf("base64 image should be replaced with [image] stub, got %v", stub)
-	}
-	// Third part should remain (non-base64 URL)
-	if result[2].(map[string]any)["type"] != "image_url" {
-		t.Error("non-base64 image should remain")
 	}
 }
 
@@ -734,7 +702,7 @@ func TestProcessMessageEmptyAssistantFilter(t *testing.T) {
 	defer srv.Close()
 
 	session := agent.sessions.getOrCreate("test-session")
-	messages := agent.context.buildMessages(nil, "hi", nil, "telegram", "123")
+	messages := agent.context.buildMessages(nil, "hi", "telegram", "123")
 	content, _ := agent.runLoop(context.Background(), messages, nil)
 
 	// The runLoop returns empty content; ProcessMessage should not save it.

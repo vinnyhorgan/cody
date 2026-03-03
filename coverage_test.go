@@ -234,29 +234,6 @@ func TestStripFrontmatterMalformed(t *testing.T) {
 	}
 }
 
-// --- agent.go: stripBase64Images edge cases ---
-
-func TestStripBase64ImagesNonString(t *testing.T) {
-	// Pass a list content (ContentPart slice)
-	parts := []ContentPart{
-		{Type: "text", Text: "hello"},
-		{Type: "image_url", ImageURL: &ImageURL{URL: "data:image/png;base64,abc123"}},
-	}
-	// Convert to any
-	result := stripBase64Images(parts)
-	// Should return as-is since it's not a string
-	if _, ok := result.([]ContentPart); !ok {
-		t.Errorf("expected []ContentPart back, got %T", result)
-	}
-}
-
-func TestStripBase64ImagesNoMatch(t *testing.T) {
-	got := stripBase64Images("Hello world, no images here")
-	if got != "Hello world, no images here" {
-		t.Errorf("expected unchanged, got %q", got)
-	}
-}
-
 // --- agent.go: ProcessDirect with chatID ---
 
 func TestProcessDirectWithChatID(t *testing.T) {
@@ -2185,34 +2162,6 @@ func TestExpandHomeTilde(t *testing.T) {
 	result = expandHome("/absolute/path")
 	if result != "/absolute/path" {
 		t.Errorf("expandHome: got %q, want /absolute/path", result)
-	}
-}
-
-func TestStripBase64ImagesWithURL(t *testing.T) {
-	parts := []any{
-		map[string]any{"type": "text", "text": "hello"},
-		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,iVBOR..."}},
-		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/image.png"}},
-	}
-	result := stripBase64Images(parts)
-	out, ok := result.([]any)
-	if !ok {
-		t.Fatal("expected []any")
-	}
-	if len(out) != 3 {
-		t.Errorf("expected 3 parts, got %d", len(out))
-	}
-	// First should be text, second should be [image], third should be kept
-	m := out[1].(map[string]any)
-	if m["text"] != "[image]" {
-		t.Errorf("expected [image], got %v", m["text"])
-	}
-}
-
-func TestStripBase64ImagesNonSlice(t *testing.T) {
-	result := stripBase64Images("plain string")
-	if result != "plain string" {
-		t.Errorf("expected plain string pass-through")
 	}
 }
 

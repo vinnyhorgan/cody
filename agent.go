@@ -609,7 +609,7 @@ func (cb *ContextBuilder) loadTemplate(name string) string {
 	return strings.TrimSpace(string(data))
 }
 
-func (cb *ContextBuilder) buildMessages(history []ChatMessage, userContent string, media []Media, channel, chatID string) []ChatMessage {
+func (cb *ContextBuilder) buildMessages(history []ChatMessage, userContent string, channel, chatID string) []ChatMessage {
 	msgs := make([]ChatMessage, 0, len(history)+4)
 
 	// System prompt
@@ -1045,8 +1045,7 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg *InboundMessage) (st
 	session := a.sessions.getOrCreate(msg.SessionKey)
 
 	// Save user message to session.
-	userContent := stripBase64Images(msg.Content)
-	session.addMessage("user", userContent, nil, "", "")
+	session.addMessage("user", msg.Content, nil, "", "")
 
 	// Build context: use history BEFORE the message we just added (it's included separately)
 	allHistory := session.getHistory(a.config.Agent.MemoryWindow)
@@ -1055,7 +1054,7 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg *InboundMessage) (st
 	if len(history) > 0 {
 		history = history[:len(history)-1]
 	}
-	messages := a.context.buildMessages(history, msg.Content, msg.Media, "telegram", msg.ChatID)
+	messages := a.context.buildMessages(history, msg.Content, "telegram", msg.ChatID)
 
 	// Progress callback sends updates to user during processing
 	onProgress := func(content string, toolHint bool) {
@@ -1191,33 +1190,6 @@ func stripThinkBlocks(content string) string {
 	return strings.TrimSpace(thinkBlockRe.ReplaceAllString(content, ""))
 }
 
-// stripBase64Images replaces inline base64 image URLs with a placeholder
-// to prevent session history from bloating with large encoded data.
-func stripBase64Images(content any) any {
-	parts, ok := content.([]any)
-	if !ok {
-		return content
-	}
-	out := make([]any, 0, len(parts))
-	for _, part := range parts {
-		m, ok := part.(map[string]any)
-		if !ok {
-			out = append(out, part)
-			continue
-		}
-		if m["type"] == "image_url" {
-			if iu, ok := m["image_url"].(map[string]any); ok {
-				if url, ok := iu["url"].(string); ok && strings.HasPrefix(url, "data:image/") {
-					out = append(out, map[string]any{"type": "text", "text": "[image]"})
-					continue
-				}
-			}
-		}
-		out = append(out, part)
-	}
-	return out
-}
-
 // formatToolHint produces a short description of a tool call for progress updates.
 // Matches nanobot format: name("first_arg_value") or just name if no string arg.
 func formatToolHint(tc ToolCall) string {
@@ -1267,7 +1239,7 @@ func (a *AgentLoop) processDirect(ctx context.Context, content, sessionKey, chat
 	if chatID != "" {
 		channel = "telegram"
 	}
-	messages := a.context.buildMessages(history, content, nil, channel, chatID)
+	messages := a.context.buildMessages(history, content, channel, chatID)
 
 	result, newMessages := a.runLoop(ctx, messages, nil)
 	if shouldPersistAssistant(result) {

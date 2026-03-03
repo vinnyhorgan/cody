@@ -10,7 +10,14 @@ You message it like a teammate, and it can:
 - run shell commands and edit files,
 - search/fetch the web,
 - schedule reminders and background jobs,
-- handle voice and media.
+- handle voice and Telegram file attachments.
+
+Scope guardrails:
+
+- Telegram only (no Discord/Slack/other channels)
+- `gpt-oss-120b` as the default model target
+- no MCP support
+- no image multimodal input (photos are treated as text context only)
 
 Everything runs from a single self-hosted Go binary, with local plain-text storage you can inspect and edit.
 
@@ -28,7 +35,7 @@ Everything runs from a single self-hosted Go binary, with local plain-text stora
 
 - Go 1.25+
 - Telegram bot token (from [@BotFather](https://t.me/BotFather))
-- API key for an OpenAI-compatible endpoint (default target: Cerebras)
+- API key for Cerebras (default) or another OpenAI-compatible endpoint
 - Optional: Groq API key (voice transcription)
 - Optional: Brave Search API key (web search)
 
@@ -125,10 +132,10 @@ Cody ships with 10 built-in tools:
 
 | Tool         | Purpose                                              |
 | ------------ | ---------------------------------------------------- |
-| `read_file`  | Read files (optionally by line ranges)               |
+| `read_file`  | Read full file contents                              |
 | `write_file` | Create/overwrite files                               |
 | `edit_file`  | Targeted find/replace edits                          |
-| `list_dir`   | List directories with depth control                  |
+| `list_dir`   | List immediate directory contents                    |
 | `exec`       | Run shell commands with safety checks and timeout    |
 | `web_search` | Search the web (Brave API)                           |
 | `web_fetch`  | Fetch URL content as readable text                   |
@@ -146,10 +153,11 @@ Cody supports:
 
 It also has a heartbeat loop that scans `HEARTBEAT.md` periodically and can trigger tasks automatically.
 
-### Voice + media
+### Voice + Telegram attachments
 
 - Voice and audio transcription via Groq Whisper (`whisper-large-v3-turbo`)
-- Photo/document handling from Telegram
+- Telegram documents are downloaded into `workspace/media/` and referenced as `[file: /absolute/path]`
+- Telegram photos are accepted, but not passed as image input to the model
 - Media-group buffering so related photos are processed together
 
 ### Skills
@@ -288,8 +296,12 @@ Cody is a focused fork of nanobot with a narrower surface area:
 
 - Telegram-centered interaction
 - OpenAI-compatible API path (no large provider abstraction layer)
+- default target: Cerebras + `gpt-oss-120b`
+- no MCP integration
+- no multimodal image input path
 - small, readable Go codebase with minimal package complexity
 
 ## License
 
 MIT
+`OPENAI_*` variables are compatibility fallbacks. The intended baseline for Cody is Cerebras + `gpt-oss-120b`.
