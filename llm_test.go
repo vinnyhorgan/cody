@@ -1,0 +1,386 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+)
+
+func TestChatMessageSerialization(t *testing.T) {
+	msg := ChatMessage{
+		Role:    "assistant",
+		Content: "hello",
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var decoded ChatMessage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+
+	if decoded.Role != "assistant" {
+		t.Errorf("role = %q, want %q", decoded.Role, "assistant")
+	}
+}
+
+func TestToolCallSerialization(t *testing.T) {
+	tc := ToolCall{
+		ID:   "call_123",
+		Type: "function",
+		Function: FunctionCall{
+			Name:      "read_file",
+			Arguments: `{"path": "test.txt"}`,
+		},
+	}
+
+	data, err := json.Marshal(tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var decoded ToolCall
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+
+	if decoded.ID != "call_123" {
+		t.Errorf("id = %q, want %q", decoded.ID, "call_123")
+	}
+	if decoded.Function.Name != "read_file" {
+		t.Errorf("function.name = %q, want %q", decoded.Function.Name, "read_file")
+	}
+}
+
+func TestToolDefStructure(t *testing.T) {
+	def := ToolDef{
+		Type: "function",
+		Function: FunctionDef{
+			Name:        "test",
+			Description: "A test function",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"arg": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(def)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify it produces valid JSON
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	if raw["type"] != "function" {
+		t.Errorf("type = %v", raw["type"])
+	}
+}
+
+func TestLLMResponseContent(t *testing.T) {
+	// Simulate a non-tool-call response
+	resp := LLMResponse{
+		Content:   "Hello, how can I help?",
+		ToolCalls: nil,
+		Usage:     LLMUsage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120},
+	}
+
+	if resp.Content == "" {
+		t.Error("content should not be empty")
+	}
+	if len(resp.ToolCalls) != 0 {
+		t.Error("tool_calls should be empty")
+	}
+	if resp.Usage.TotalTokens != 120 {
+		t.Errorf("total_tokens = %d, want 120", resp.Usage.TotalTokens)
+	}
+}
+
+// mockLLMServer creates a test HTTP server that mimics the OpenAI chat completions API.
+// The handler func receives the decoded request and returns the response to send.
+func mockLLMServer(t *testing.T, handler func(req chatRequest) (int, chatResponse)) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.Error(w, "not found", 404)
+			return
+		}
+		var req chatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("failed to decode request: %v", err)
+			http.Error(w, "bad request", 400)
+			return
+		}
+		status, resp := handler(req)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(resp)
+	}))
+}
+
+func TestLLMClientChatSuccess(t *testing.T) {
+	srv := mockLLMServer(t, func(req chatRequest) (int, chatResponse) {
+		return 200, chatResponse{
+			Choices: []chatChoice{{
+				Message:      ChatMessage{Role: "assistant", Content: "Hello!"},
+				FinishReason: "stop",
+			}},
+			Usage: LLMUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		}
+	})
+	defer srv.Close()
+
+	client := newLLMClient("test-key", srv.URL, "test-model")
+	resp, err := client.chat(context.Background(), []ChatMessage{
+		{Role: "user", Content: "hi"},
+	}, nil, 100, 0.7, "")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "Hello!" {
+		t.Errorf("content = %q, want %q", resp.Content, "Hello!")
+	}
+	if resp.FinishReason != "stop" {
+		t.Errorf("finish_reason = %q, want %q", resp.FinishReason, "stop")
+	}
+	if resp.Usage.TotalTokens != 15 {
+		t.Errorf("total_tokens = %d, want 15", resp.Usage.TotalTokens)
+	}
+}
+
+func TestLLMClientChatWithToolCalls(t *testing.T) {
+	srv := mockLLMServer(t, func(req chatRequest) (int, chatResponse) {
+		return 200, chatResponse{
+			Choices: []chatChoice{{
+				Message: ChatMessage{
+					Role: "assistant",
+					ToolCalls: []ToolCall{{
+						ID:   "call_1",
+						Type: "function",
+						Function: FunctionCall{
+							Name:      "read_file",
+							Arguments: `{"path":"test.txt"}`,
+						},
+					}},
+				},
+				FinishReason: "tool_calls",
+			}},
+		}
+	})
+	defer srv.Close()
+
+	client := newLLMClient("test-key", srv.URL, "test-model")
+	resp, err := client.chat(context.Background(), []ChatMessage{
+		{Role: "user", Content: "read test.txt"},
+	}, []ToolDef{{
+		Type:     "function",
+		Function: FunctionDef{Name: "read_file", Description: "Read a file"},
+	}}, 100, 0.7, "")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].Function.Name != "read_file" {
+		t.Errorf("tool name = %q, want %q", resp.ToolCalls[0].Function.Name, "read_file")
+	}
+}
+
+func TestLLMClientChatRetryOn5xx(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n <= 2 {
+			w.WriteHeader(500)
+			w.Write([]byte(`{"error":"server error"}`))
+			return
+		}
+		resp := chatResponse{
+			Choices: []chatChoice{{
+				Message:      ChatMessage{Role: "assistant", Content: "recovered"},
+				FinishReason: "stop",
+			}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	client := newLLMClient("test-key", srv.URL, "test-model")
+	resp, err := client.chat(context.Background(), []ChatMessage{
+		{Role: "user", Content: "hi"},
+	}, nil, 100, 0.7, "")
+
+	if err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if resp.Content != "recovered" {
+		t.Errorf("content = %q, want %q", resp.Content, "recovered")
+	}
+	if calls.Load() != 3 {
+		t.Errorf("expected 3 calls (2 retries + 1 success), got %d", calls.Load())
+	}
+}
+
+func TestLLMClientChat4xxNoRetry(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":"bad request"}`))
+	}))
+	defer srv.Close()
+
+	client := newLLMClient("test-key", srv.URL, "test-model")
+	_, err := client.chat(context.Background(), []ChatMessage{
+		{Role: "user", Content: "hi"},
+	}, nil, 100, 0.7, "")
+
+	if err == nil {
+		t.Fatal("expected error for 400 response")
+	}
+	if calls.Load() != 1 {
+		t.Errorf("expected 1 call (no retry on 4xx), got %d", calls.Load())
+	}
+}
+
+func TestLLMClientChatErrorFinishReason(t *testing.T) {
+	srv := mockLLMServer(t, func(req chatRequest) (int, chatResponse) {
+		return 200, chatResponse{
+			Choices: []chatChoice{{
+				Message:      ChatMessage{Role: "assistant", Content: "partial output"},
+				FinishReason: "error",
+			}},
+		}
+	})
+	defer srv.Close()
+
+	client := newLLMClient("test-key", srv.URL, "test-model")
+	resp, err := client.chat(context.Background(), []ChatMessage{
+		{Role: "user", Content: "hi"},
+	}, nil, 100, 0.7, "")
+
+	// The LLM client itself doesn't filter finish_reason — that's the agent loop's job.
+	// But it should return the finish_reason so the caller can check.
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.FinishReason != "error" {
+		t.Errorf("finish_reason = %q, want %q", resp.FinishReason, "error")
+	}
+}
+
+func TestLLMClientChatNoChoices(t *testing.T) {
+	srv := mockLLMServer(t, func(req chatRequest) (int, chatResponse) {
+		return 200, chatResponse{Choices: nil}
+	})
+	defer srv.Close()
+
+	client := newLLMClient("test-key", srv.URL, "test-model")
+	_, err := client.chat(context.Background(), []ChatMessage{
+		{Role: "user", Content: "hi"},
+	}, nil, 100, 0.7, "")
+
+	if err == nil {
+		t.Fatal("expected error for empty choices")
+	}
+}
+
+func TestLLMClientChatContextCancelled(t *testing.T) {
+	srv := mockLLMServer(t, func(req chatRequest) (int, chatResponse) {
+		return 200, chatResponse{
+			Choices: []chatChoice{{
+				Message: ChatMessage{Role: "assistant", Content: "ok"},
+			}},
+		}
+	})
+	defer srv.Close()
+
+	client := newLLMClient("test-key", srv.URL, "test-model")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err := client.chat(ctx, []ChatMessage{
+		{Role: "user", Content: "hi"},
+	}, nil, 100, 0.7, "")
+
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
+	}
+}
+
+func TestLLMClientChatRequestFormat(t *testing.T) {
+	var captured chatRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&captured)
+
+		// Check auth header
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer my-key" {
+			t.Errorf("Authorization = %q, want %q", auth, "Bearer my-key")
+		}
+
+		resp := chatResponse{
+			Choices: []chatChoice{{
+				Message: ChatMessage{Role: "assistant", Content: "ok"},
+			}},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	client := newLLMClient("my-key", srv.URL, "my-model")
+	client.chat(context.Background(), []ChatMessage{
+		{Role: "system", Content: "You are helpful"},
+		{Role: "user", Content: "hi"},
+	}, []ToolDef{{
+		Type:     "function",
+		Function: FunctionDef{Name: "test", Description: "test"},
+	}}, 2048, 0.5, "")
+
+	if captured.Model != "my-model" {
+		t.Errorf("model = %q, want %q", captured.Model, "my-model")
+	}
+	if len(captured.Messages) != 2 {
+		t.Errorf("expected 2 messages, got %d", len(captured.Messages))
+	}
+	if len(captured.Tools) != 1 {
+		t.Errorf("expected 1 tool, got %d", len(captured.Tools))
+	}
+	if captured.MaxTokens != 2048 {
+		t.Errorf("max_tokens = %d, want 2048", captured.MaxTokens)
+	}
+	if captured.Temperature == nil || *captured.Temperature != 0.5 {
+		t.Error("temperature should be 0.5")
+	}
+}
+
+func TestRequestModelOpenRouterPrefixStripped(t *testing.T) {
+	client := newLLMClient("sk-or-v1-test", "https://openrouter.ai/api/v1", "openrouter/gpt-oss-120b")
+	if got := client.requestModel(); got != "gpt-oss-120b" {
+		t.Fatalf("requestModel() = %q, want %q", got, "gpt-oss-120b")
+	}
+}
+
+func TestRequestModelNonOpenRouterUnchanged(t *testing.T) {
+	client := newLLMClient("sk-test", "https://api.example.com/v1", "openrouter/gpt-oss-120b")
+	if got := client.requestModel(); got != "openrouter/gpt-oss-120b" {
+		t.Fatalf("requestModel() = %q, want unchanged model", got)
+	}
+}

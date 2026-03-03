@@ -1,0 +1,52 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.go]
+indent_style = tab
+tab_width = 4
+
+[go.mod]
+indent_style = tab
+tab_width = 4
+
+[go.sum]
+indent_style = tab
+tab_width = 4
+
+[Makefile]
+indent_style = tab
+tab_width = 4
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{yml,yaml,json,toml,sh}]
+indent_style = space
+indent_size = 2
+
+[Dockerfile]
+indent_style = space
+indent_size = 2
+
+[.editorconfig]
+indent_style = space
+indent_size = 2
+
+[.gitattributes]
+indent_style = space
+indent_size = 2
+
+[.gitignore]
+indent_style = space
+indent_size = 2
+
+[LICENSE]
+indent_style = space
+indent_size = 2

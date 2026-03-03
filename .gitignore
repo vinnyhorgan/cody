@@ -1,0 +1,18 @@
+# Build output
+cody
+*.exe
+
+# Go
+vendor/
+
+# Test coverage
+*.out
+
+# OS
+.DS_Store
+*.swp
+*~
+
+# Local secrets
+.env
+.env.*

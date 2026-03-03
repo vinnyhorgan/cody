@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  COVERAGE_MIN: "80.0"
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: 1.25.x
+          cache: true
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Install shfmt
+        run: go install mvdan.cc/sh/v3/cmd/shfmt@v3.10.0
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run full CI suite
+        run: make ci COVERAGE_MIN="$COVERAGE_MIN"
+
+  go-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ["1.25.x", "stable"]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Install shfmt
+        run: go install mvdan.cc/sh/v3/cmd/shfmt@v3.10.0
+
+      - name: Compatibility checks
+        run: make fmt-check tidy-check vet lint staticcheck test build
+
+  coverage-artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [ci]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: 1.25.x
+          cache: true
+
+      - name: Generate coverage artifact
+        run: go test -tags testcoverage ./... -count=1 -coverprofile=coverage.out
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: coverage-1.25
+          path: coverage.out
+          if-no-files-found: error
+
+  cross-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: 1.25.x
+          cache: true
+
+      - name: Cross compile
+        run: |
+          ext=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then ext=".exe"; fi
+          GOOS=${{ matrix.goos }} GOARCH=amd64 go build -ldflags="-s -w" -o /tmp/cody-${{ matrix.goos }}-amd64${ext} .

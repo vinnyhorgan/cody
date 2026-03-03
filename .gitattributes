@@ -1,0 +1,38 @@
+# Normalize text files and enforce LF in working tree
+* text=auto eol=lf
+
+# Language-aware diffs
+*.go text diff=golang
+*.md text diff=markdown
+
+# Go module metadata
+go.mod text eol=lf
+go.sum text eol=lf
+Makefile text eol=lf
+LICENSE text eol=lf
+
+# Scripts and configuration
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+*.env text eol=lf
+
+# Repository meta files
+.editorconfig text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.exe binary

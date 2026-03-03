@@ -1,0 +1,14 @@
+services:
+  cody:
+    container_name: cody
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ~/.cody:/root/.cody
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
