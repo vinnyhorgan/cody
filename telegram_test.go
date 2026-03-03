@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -163,6 +164,18 @@ func TestMarkdownToTelegramHTMLTableCellInlineMarkdown(t *testing.T) {
 	}
 }
 
+func TestMarkdownToTelegramHTMLTableHeaderMarkdownMarkers(t *testing.T) {
+	input := "| Criterion | **SQLite** | **PostgreSQL** |\n| --- | --- | --- |\n| Setup effort | `brew install sqlite3` | `brew install postgresql` |"
+	got := markdownToTelegramHTML(input)
+
+	if strings.Contains(got, "**SQLite**") || strings.Contains(got, "**PostgreSQL**") {
+		t.Fatalf("expected markdown markers in header labels to be stripped, got: %q", got)
+	}
+	if !strings.Contains(got, "<b>SQLite:</b>") || !strings.Contains(got, "<b>PostgreSQL:</b>") {
+		t.Fatalf("expected clean bold header labels, got: %q", got)
+	}
+}
+
 func TestNormalizeMarkdownTablesForTelegram(t *testing.T) {
 	input := "```\n| keep | this |\n| ---- | ---- |\n| as | code |\n```\n\n| Name | Role |\n| ---- | ---- |\n| Ana | **Dev** |\n| Bob | [SRE](https://example.com) |"
 	got := normalizeMarkdownTablesForTelegram(input)
@@ -227,12 +240,50 @@ func TestSplitMessageForTelegramLongTableKeepsReadableChunks(t *testing.T) {
 	}
 }
 
+func TestSplitMessageForTelegramBalancesFencedCodeBlocks(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("Setup notes\n\n```bash\n")
+	for i := 0; i < 220; i++ {
+		fmt.Fprintf(&b, "echo line-%03d\n", i)
+	}
+	b.WriteString("```\n\nThen continue with more details.\n")
+
+	chunks := splitMessageForTelegram(b.String(), 500)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+
+	for i, chunk := range chunks {
+		if strings.Count(chunk, "```")%2 != 0 {
+			t.Fatalf("chunk %d has unbalanced fenced code block markers: %q", i, chunk)
+		}
+		rendered := markdownToTelegramHTML(chunk)
+		if strings.Contains(rendered, "```") {
+			t.Fatalf("chunk %d leaked raw fence markers after rendering: %q", i, rendered)
+		}
+		if len(rendered) > 500 {
+			t.Fatalf("chunk %d rendered length=%d exceeds budget", i, len(rendered))
+		}
+	}
+}
+
 func TestMarkdownToTelegramHTMLCodeBlockWithTableSyntax(t *testing.T) {
 	input := "```\n| Name | Role |\n| ---- | ---- |\n| Ana | Dev |\n```"
 	got := markdownToTelegramHTML(input)
 	want := "<pre><code>| Name | Role |\n| ---- | ---- |\n| Ana | Dev |</code></pre>"
 	if !strings.Contains(got, want) {
 		t.Fatalf("expected fenced code block content to remain unchanged\n  got:  %q\n  want contains: %q", got, want)
+	}
+}
+
+func TestMarkdownToTelegramHTMLCodeBlockLanguageWithSymbols(t *testing.T) {
+	input := "```c++\nint x;\n```"
+	got := markdownToTelegramHTML(input)
+	if !strings.Contains(got, "<pre><code>int x;</code></pre>") {
+		t.Fatalf("expected fenced code block body without language marker noise, got: %q", got)
+	}
+	if strings.Contains(got, "++\nint x;") {
+		t.Fatalf("language marker should not leak into code body, got: %q", got)
 	}
 }
 
@@ -326,6 +377,22 @@ func TestSplitMessageTrimsLeadingWhitespaceAfterSplit(t *testing.T) {
 	}
 	if strings.HasPrefix(chunks[1], " ") {
 		t.Fatalf("second chunk should not start with whitespace: %q", chunks[1])
+	}
+}
+
+func TestSplitMessagePreservesUTF8Runes(t *testing.T) {
+	input := strings.Repeat("😀", 20)
+	chunks := splitMessage(input, 5) // 5 bytes can split inside an emoji if not guarded
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if !utf8.ValidString(c) {
+			t.Fatalf("chunk %d is invalid UTF-8: %q", i, c)
+		}
+	}
+	if strings.Join(chunks, "") != input {
+		t.Fatalf("recombined chunks differ from original input")
 	}
 }
 
@@ -693,6 +760,18 @@ func TestMarkdownLinks(t *testing.T) {
 	}
 }
 
+func TestMarkdownHTMLBreakTagsBecomeNewlines(t *testing.T) {
+	input := "line one<br>line two<br/>line three<BR />line four"
+	got := markdownToTelegramHTML(input)
+
+	if strings.Contains(got, "&lt;br") || strings.Contains(strings.ToLower(got), "<br") {
+		t.Fatalf("expected html break tags to be normalized away, got: %s", got)
+	}
+	if !strings.Contains(got, "line one\nline two\nline three\nline four") {
+		t.Fatalf("expected newline conversion, got: %s", got)
+	}
+}
+
 func TestMarkdownLinksWithParenthesesInURL(t *testing.T) {
 	input := "[Parens](https://en.wikipedia.org/wiki/Function_(mathematics))"
 	got := markdownToTelegramHTML(input)
@@ -706,6 +785,18 @@ func TestMarkdownLinksWithAmpersandQuery(t *testing.T) {
 	got := markdownToTelegramHTML(input)
 	if !strings.Contains(got, `<a href="https://example.com/search?q=a&amp;b=c">Query</a>`) {
 		t.Fatalf("expected query URL link conversion, got: %s", got)
+	}
+}
+
+func TestMarkdownAutoLinks(t *testing.T) {
+	input := "Status page: <https://status.example.com/incidents/db_(primary)?env=prod&region=eu>"
+	got := markdownToTelegramHTML(input)
+	want := `<a href="https://status.example.com/incidents/db_(primary)?env=prod&amp;region=eu">https://status.example.com/incidents/db_(primary)?env=prod&amp;region=eu</a>`
+	if !strings.Contains(got, want) {
+		t.Fatalf("expected autolink conversion, got: %s", got)
+	}
+	if strings.Contains(got, "&lt;https://") {
+		t.Fatalf("autolink should not be rendered as escaped literal, got: %s", got)
 	}
 }
 

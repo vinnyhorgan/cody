@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -740,6 +741,8 @@ var (
 	underscoreItalicRe = regexp.MustCompile(`(^|[^A-Za-z0-9])_([^_\n]+?)_([^A-Za-z0-9]|$)`)
 	telegramStrikeRe   = regexp.MustCompile(`~~(.+?)~~`)
 	markdownV2EscapeRe = regexp.MustCompile("\\\\([_\\*\\[\\]\\(\\)~`>#+\\-=|{}.!])")
+	htmlBreakRe        = regexp.MustCompile(`(?i)<br\s*/?>`)
+	markdownAutoLinkRe = regexp.MustCompile(`<(https?://[^>\s]+)>`)
 )
 
 const telegramPlaceholderPrefix = "@@CODYTG_"
@@ -753,6 +756,13 @@ func unescapeMarkdownV2Escapes(text string) string {
 }
 
 func formatTelegramInlineMarkdown(text string) string {
+	// Some models emit HTML break tags even when asked for markdown.
+	// Normalize them to plain newlines before escaping.
+	text = htmlBreakRe.ReplaceAllString(text, "\n")
+	// Normalize markdown autolinks (<https://...>) to regular markdown links
+	// so they become clickable anchors in Telegram HTML mode.
+	text = normalizeMarkdownAutoLinks(text)
+
 	text = escapeHTML(text)
 
 	// Links [text](url) - must be before bold/italic to handle nested cases.
@@ -786,12 +796,26 @@ func formatTelegramInlineMarkdown(text string) string {
 	return text
 }
 
+func normalizeMarkdownAutoLinks(text string) string {
+	return markdownAutoLinkRe.ReplaceAllStringFunc(text, func(match string) string {
+		parts := markdownAutoLinkRe.FindStringSubmatch(match)
+		if len(parts) < 2 {
+			return match
+		}
+		url := strings.TrimSpace(parts[1])
+		if url == "" {
+			return match
+		}
+		return "[" + url + "](" + url + ")"
+	})
+}
+
 func markdownToTelegramHTML(text string) string {
 	text = unwrapTopLevelMarkdownFence(text)
 
 	// Protect code blocks first
 	var codeBlocks []string
-	codeBlockRe := regexp.MustCompile("(?s)```(\\w*)\n?(.*?)```")
+	codeBlockRe := regexp.MustCompile("(?s)```([^`\n]*)\n?(.*?)```")
 	text = codeBlockRe.ReplaceAllStringFunc(text, func(match string) string {
 		parts := codeBlockRe.FindStringSubmatch(match)
 		placeholder := telegramPlaceholder("CODEBLOCK", len(codeBlocks))
@@ -993,7 +1017,7 @@ func normalizeMarkdownTablesForTelegram(text string) string {
 	}
 
 	var codeBlocks []string
-	codeBlockRe := regexp.MustCompile("(?s)```(\\w*)\n?(.*?)```")
+	codeBlockRe := regexp.MustCompile("(?s)```([^`\n]*)\n?(.*?)```")
 	text = codeBlockRe.ReplaceAllStringFunc(text, func(match string) string {
 		placeholder := telegramPlaceholder("TABLECODEBLOCK", len(codeBlocks))
 		codeBlocks = append(codeBlocks, match)
@@ -1069,6 +1093,39 @@ func isMarkdownSeparatorCell(cell string) bool {
 	return true
 }
 
+func normalizeMarkdownLabel(label string) string {
+	s := strings.TrimSpace(label)
+	if s == "" {
+		return s
+	}
+
+	for {
+		changed := false
+		switch {
+		case len(s) > 4 && strings.HasPrefix(s, "**") && strings.HasSuffix(s, "**"):
+			s = strings.TrimSpace(s[2 : len(s)-2])
+			changed = true
+		case len(s) > 4 && strings.HasPrefix(s, "__") && strings.HasSuffix(s, "__"):
+			s = strings.TrimSpace(s[2 : len(s)-2])
+			changed = true
+		case len(s) > 2 && strings.HasPrefix(s, "`") && strings.HasSuffix(s, "`"):
+			s = strings.TrimSpace(s[1 : len(s)-1])
+			changed = true
+		case len(s) > 2 && strings.HasPrefix(s, "*") && strings.HasSuffix(s, "*"):
+			s = strings.TrimSpace(s[1 : len(s)-1])
+			changed = true
+		case len(s) > 2 && strings.HasPrefix(s, "_") && strings.HasSuffix(s, "_"):
+			s = strings.TrimSpace(s[1 : len(s)-1])
+			changed = true
+		}
+		if !changed {
+			break
+		}
+	}
+
+	return s
+}
+
 func renderTableCodeBlock(header []string, rows [][]string) string {
 	var b strings.Builder
 	for ri, row := range rows {
@@ -1081,7 +1138,7 @@ func renderTableCodeBlock(header []string, rows [][]string) string {
 			title := ""
 			details := ""
 			if len(row) > 0 {
-				title = strings.TrimSpace(row[0])
+				title = normalizeMarkdownLabel(row[0])
 			}
 			if len(row) > 1 {
 				details = strings.TrimSpace(row[1])
@@ -1111,7 +1168,7 @@ func renderTableCodeBlock(header []string, rows [][]string) string {
 				b.WriteString(" | ")
 			}
 			b.WriteString("<b>")
-			b.WriteString(escapeHTML(strings.TrimSpace(header[i])))
+			b.WriteString(escapeHTML(normalizeMarkdownLabel(header[i])))
 			b.WriteString(":</b> ")
 			b.WriteString(formatTelegramInlineMarkdown(value))
 			wrote = true
@@ -1135,7 +1192,7 @@ func renderTableMarkdownBlock(header []string, rows [][]string) string {
 			title := ""
 			details := ""
 			if len(row) > 0 {
-				title = strings.TrimSpace(row[0])
+				title = normalizeMarkdownLabel(row[0])
 			}
 			if len(row) > 1 {
 				details = strings.TrimSpace(row[1])
@@ -1169,7 +1226,7 @@ func renderTableMarkdownBlock(header []string, rows [][]string) string {
 			if wrote {
 				b.WriteString(" | ")
 			}
-			label := strings.TrimSpace(header[i])
+			label := normalizeMarkdownLabel(header[i])
 			if label != "" {
 				b.WriteString("**")
 				b.WriteString(label)
@@ -1206,10 +1263,31 @@ func splitMessage(text string, maxLen int) []string {
 		if cut == 0 {
 			cut = maxLen
 		}
+		cut = clampToRuneBoundary(text, cut)
+		if cut == 0 {
+			_, size := utf8.DecodeRuneInString(text)
+			if size <= 0 {
+				size = 1
+			}
+			cut = size
+		}
 		chunks = append(chunks, text[:cut])
 		text = strings.TrimLeft(text[cut:], " \t\r\n")
 	}
 	return chunks
+}
+
+func clampToRuneBoundary(text string, idx int) int {
+	if idx <= 0 {
+		return 0
+	}
+	if idx >= len(text) {
+		return len(text)
+	}
+	for idx > 0 && !utf8.RuneStart(text[idx]) {
+		idx--
+	}
+	return idx
 }
 
 func splitMessageForTelegram(text string, maxHTMLLen int) []string {
@@ -1221,6 +1299,30 @@ func splitMessageForTelegram(text string, maxHTMLLen int) []string {
 	for _, chunk := range initial {
 		out = append(out, splitChunkToRenderedLimit(chunk, maxHTMLLen)...)
 	}
+
+	// Keep fenced code blocks balanced per chunk so Telegram HTML rendering
+	// doesn't leak raw ``` markers when a split lands inside a fence.
+	for range 2 {
+		out = rebalanceFencedCodeChunks(out)
+		var adjusted []string
+		changed := false
+		for _, chunk := range out {
+			if len(markdownToTelegramHTML(chunk)) <= maxHTMLLen {
+				adjusted = append(adjusted, chunk)
+				continue
+			}
+			parts := splitChunkToRenderedLimit(chunk, maxHTMLLen)
+			if len(parts) > 1 {
+				changed = true
+			}
+			adjusted = append(adjusted, parts...)
+		}
+		out = adjusted
+		if !changed {
+			break
+		}
+	}
+
 	return out
 }
 
@@ -1259,4 +1361,55 @@ func splitChunkToRenderedLimit(chunk string, maxHTMLLen int) []string {
 	}
 
 	return out
+}
+
+func rebalanceFencedCodeChunks(chunks []string) []string {
+	if len(chunks) <= 1 {
+		return chunks
+	}
+
+	out := make([]string, 0, len(chunks))
+	openLang := ""
+
+	for i, original := range chunks {
+		chunk := original
+		if openLang != "" {
+			chunk = "```" + openLang + "\n" + strings.TrimLeft(chunk, "\n")
+		}
+
+		inFence := false
+		lang := ""
+		for _, line := range strings.Split(chunk, "\n") {
+			l, ok := markdownFenceLang(line)
+			if !ok {
+				continue
+			}
+			if inFence {
+				inFence = false
+				lang = ""
+			} else {
+				inFence = true
+				lang = l
+			}
+		}
+
+		if inFence && i < len(chunks)-1 {
+			chunk = strings.TrimRight(chunk, "\n") + "\n```"
+			openLang = lang
+		} else {
+			openLang = ""
+		}
+
+		out = append(out, chunk)
+	}
+
+	return out
+}
+
+func markdownFenceLang(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "```") {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(trimmed, "```")), true
 }
