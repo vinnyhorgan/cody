@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -1204,20 +1206,22 @@ func TestHandleMessagePhoto(t *testing.T) {
 }
 
 func TestHandleMessageDocument(t *testing.T) {
-	// Create a file server for downloading
-	fileSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("file content here"))
-	}))
-	defer fileSrv.Close()
-
 	tgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		path := r.URL.Path
 		switch {
+		case strings.HasSuffix(path, "/documents/test.txt"):
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write([]byte("file content here"))
 		case strings.HasSuffix(path, "/getMe"):
 			json.NewEncoder(w).Encode(map[string]any{
-				"ok":     true,
-				"result": map[string]any{"id": 1, "is_bot": true, "first_name": "Bot", "username": "bot"},
+				"ok": true,
+				"result": map[string]any{
+					"id":         1,
+					"is_bot":     true,
+					"first_name": "Bot",
+					"username":   "bot",
+				},
 			})
 		case strings.HasSuffix(path, "/getFile"):
 			json.NewEncoder(w).Encode(map[string]any{
@@ -1233,8 +1237,11 @@ func TestHandleMessageDocument(t *testing.T) {
 	defer tgSrv.Close()
 
 	bot, _ := tgbotapi.NewBotAPIWithClient("tok", tgSrv.URL+"/bot%s/%s", tgSrv.Client())
+
 	bus := newMessageBus()
-	tb := &TelegramBot{config: &Config{}, bus: bus, bot: bot}
+	cfg := defaultConfig()
+	cfg.Workspace = t.TempDir()
+	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
@@ -1251,8 +1258,32 @@ func TestHandleMessageDocument(t *testing.T) {
 	go tb.handleMessage(msg)
 
 	inbound := <-bus.Inbound
-	if !strings.Contains(inbound.Content, "test.txt") {
+	if !strings.Contains(inbound.Content, "[file: ") || !strings.Contains(inbound.Content, "test.txt") {
 		t.Errorf("content = %q", inbound.Content)
+	}
+}
+
+func TestSaveInboundDocument(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Workspace = t.TempDir()
+	tb := &TelegramBot{config: cfg, bus: newMessageBus()}
+
+	path, err := tb.saveInboundDocument("test.txt", []byte("hello"))
+	if err != nil {
+		t.Fatalf("saveInboundDocument failed: %v", err)
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("expected absolute path, got %q", path)
+	}
+	if !strings.HasPrefix(path, filepath.Join(cfg.workspacePath(), "media")+string(filepath.Separator)) {
+		t.Fatalf("expected saved path under workspace media dir, got %q", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected saved file at %s: %v", path, err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("saved file content mismatch: %q", string(data))
 	}
 }
 

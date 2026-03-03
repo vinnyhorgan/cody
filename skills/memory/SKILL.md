@@ -22,6 +22,7 @@ Use the `exec` tool to run grep. Combine patterns: `grep -iE "meeting|deadline" 
 ## When to Update MEMORY.md
 
 Write important facts immediately using `edit_file` or `write_file`:
+
 - User preferences ("I prefer dark mode")
 - Project context ("The API uses OAuth2")
 - Relationships ("Alice is the project lead")

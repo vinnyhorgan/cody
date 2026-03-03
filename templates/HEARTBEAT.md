@@ -9,7 +9,6 @@ If this file has no tasks (only headers and comments), the agent will skip the h
 
 <!-- Add your periodic tasks below this line -->
 
-
 ## Completed
 
 <!-- Move completed tasks here or delete them -->

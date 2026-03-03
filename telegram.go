@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -330,25 +331,87 @@ func (tb *TelegramBot) handlePhoto(msg *tgbotapi.Message) (string, []Media) {
 }
 
 func (tb *TelegramBot) handleDocument(msg *tgbotapi.Message) (string, []Media) {
-	filename := msg.Document.FileName
-	if filename == "" {
-		filename = "file"
-	}
+	filename := sanitizeInboundFilename(msg.Document.FileName)
 	caption := formatTelegramInboundMarkdown(msg.Caption, msg.CaptionEntities)
-	if caption == "" {
-		caption = fmt.Sprintf("[file: %s]", filename)
-	}
+	fileRef := fmt.Sprintf("[file: %s]", filename)
 
 	data, err := tb.downloadFile(msg.Document.FileID)
 	if err != nil {
+		if caption == "" {
+			caption = fileRef
+		}
 		return caption, nil
 	}
+
+	savedPath, err := tb.saveInboundDocument(filename, data)
+	if err != nil {
+		slog.Warn("Failed to save inbound Telegram document", "file", filename, "err", err)
+		if caption == "" {
+			caption = fileRef
+		}
+		return caption, nil
+	}
+
+	pathRef := fmt.Sprintf("[file: %s]", savedPath)
+	if caption == "" {
+		caption = pathRef
+	} else {
+		caption = caption + "\n" + pathRef
+	}
+
 	return caption, []Media{{
 		Type:     "document",
-		Data:     data,
+		URL:      savedPath,
 		Name:     filename,
 		MimeType: msg.Document.MimeType,
 	}}
+}
+
+func (tb *TelegramBot) inboundMediaDir() string {
+	if tb.config != nil {
+		if ws := strings.TrimSpace(tb.config.workspacePath()); ws != "" {
+			return filepath.Join(ws, "media")
+		}
+	}
+	return filepath.Join(codyDir(), "media")
+}
+
+func sanitizeInboundFilename(name string) string {
+	base := filepath.Base(strings.TrimSpace(name))
+	if base == "" || base == "." {
+		return "file"
+	}
+	return base
+}
+
+func uniqueMediaPath(dir, name string) string {
+	path := filepath.Join(dir, name)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return path
+	}
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	if stem == "" {
+		stem = "file"
+	}
+	for i := 1; ; i++ {
+		candidate := filepath.Join(dir, fmt.Sprintf("%s_%d%s", stem, i, ext))
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+	}
+}
+
+func (tb *TelegramBot) saveInboundDocument(filename string, data []byte) (string, error) {
+	dir := tb.inboundMediaDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
+	}
+	path := uniqueMediaPath(dir, sanitizeInboundFilename(filename))
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func (tb *TelegramBot) downloadFile(fileID string) ([]byte, error) {

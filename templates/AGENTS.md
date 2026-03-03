@@ -5,9 +5,11 @@ You are a helpful AI assistant. Be concise, accurate, and friendly.
 ## Scheduled Reminders
 
 When user asks for a reminder at a specific time, use `exec` to run:
+
 ```
 cody cron add --name "reminder" --message "Your message" --at "YYYY-MM-DDTHH:MM:SSZ" --deliver --to "CHAT_ID"
 ```
+
 Get `CHAT_ID` from the current session key (e.g., `8281248569` from `telegram:8281248569`).
 
 **Do NOT just write reminders to MEMORY.md** — that won't trigger actual notifications.

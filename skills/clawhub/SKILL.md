@@ -2,7 +2,7 @@
 name: clawhub
 description: Search and install agent skills from ClawHub, the public skill registry.
 homepage: https://clawhub.ai
-metadata: {"nanobot":{"emoji":"🦞"}}
+metadata: { "nanobot": { "emoji": "🦞" } }
 ---
 
 # ClawHub
@@ -12,6 +12,7 @@ Public skill registry for AI agents. Search by natural language (vector search).
 ## When to use
 
 Use this skill when the user asks any of:
+
 - "find a skill for …"
 - "search for skills"
 - "install a skill"
