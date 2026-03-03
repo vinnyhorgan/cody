@@ -321,21 +321,12 @@ func (tb *TelegramBot) handleAudio(msg *tgbotapi.Message) string {
 }
 
 func (tb *TelegramBot) handlePhoto(msg *tgbotapi.Message) (string, []Media) {
-	photos := msg.Photo
 	caption := formatTelegramInboundMarkdown(msg.Caption, msg.CaptionEntities)
 	if caption == "" {
 		caption = "[image: photo.jpg]"
 	}
-	if len(photos) == 0 {
-		return caption, nil
-	}
-	// Get largest photo
-	best := photos[len(photos)-1]
-	url, err := tb.getFileURL(best.FileID)
-	if err != nil {
-		return caption, nil
-	}
-	return caption, []Media{{Type: "image", URL: url, Name: "photo.jpg"}}
+	// Cody intentionally does not send images to the LLM (text-only model setup).
+	return caption, nil
 }
 
 func (tb *TelegramBot) handleDocument(msg *tgbotapi.Message) (string, []Media) {
@@ -379,10 +370,6 @@ func (tb *TelegramBot) downloadFile(fileID string) ([]byte, error) {
 		return nil, fmt.Errorf("read downloaded file: %w", err)
 	}
 	return data, nil
-}
-
-func (tb *TelegramBot) getFileURL(fileID string) (string, error) {
-	return tb.bot.GetFileDirectURL(fileID)
 }
 
 func (tb *TelegramBot) dispatchOutbound(ctx context.Context) {

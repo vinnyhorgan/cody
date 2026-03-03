@@ -1,15 +1,7 @@
 ---
 name: tmux
 description: Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.
-metadata:
-  {
-    "cody":
-      {
-        "emoji": "🧵",
-        "os": ["darwin", "linux"],
-        "requires": { "bins": ["tmux"] },
-      },
-  }
+metadata: {"nanobot":{"emoji":"🧵","os":["darwin","linux"],"requires":{"bins":["tmux"]}}}
 ---
 
 # tmux Skill
@@ -103,7 +95,6 @@ tmux -S "$SOCKET" capture-pane -p -t agent-1 -S -500
 ```
 
 **Tips:**
-
 - Use separate git worktrees for parallel fixes (no branch conflicts)
 - `pnpm install` first before running codex in fresh clones
 - Check for shell prompt (`❯` or `$`) to detect completion

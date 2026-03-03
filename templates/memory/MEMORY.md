@@ -20,4 +20,4 @@ This file stores important information that should persist across sessions.
 
 ---
 
-_This file is automatically updated by Cody when important information should be remembered._
+*This file is automatically updated by Cody when important information should be remembered.*

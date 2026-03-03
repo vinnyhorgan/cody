@@ -36,9 +36,9 @@ Information about the user to help personalize interactions.
 
 ## Topics of Interest
 
--
--
--
+- 
+- 
+- 
 
 ## Special Instructions
 
@@ -46,4 +46,4 @@ Information about the user to help personalize interactions.
 
 ---
 
-_Edit this file to customize Cody's behavior for your needs._
+*Edit this file to customize Cody's behavior for your needs.*

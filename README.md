@@ -164,6 +164,7 @@ Built-in skills currently include:
 - `weather`
 - `tmux`
 - `summarize`
+- `clawhub`
 - `skill-creator`
 
 You can add your own skills by creating folders with a `SKILL.md` file.

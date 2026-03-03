@@ -19,11 +19,13 @@ import (
 func mockTelegramServer(t *testing.T) (*httptest.Server, *tgbotapi.BotAPI) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
 		path := r.URL.Path
 		switch {
+		case strings.Contains(path, "/file/bot") && strings.HasSuffix(path, "/photos/file.jpg"):
+			w.Header().Set("Content-Type", "image/jpeg")
+			w.Write([]byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10})
 		case strings.HasSuffix(path, "/getMe"):
+			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"ok": true,
 				"result": map[string]any{
@@ -34,11 +36,13 @@ func mockTelegramServer(t *testing.T) (*httptest.Server, *tgbotapi.BotAPI) {
 				},
 			})
 		case strings.HasSuffix(path, "/getFile"):
+			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"ok":     true,
 				"result": map[string]any{"file_id": "test", "file_path": "photos/file.jpg"},
 			})
 		case strings.HasSuffix(path, "/sendMessage"):
+			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"ok": true,
 				"result": map[string]any{
@@ -49,8 +53,10 @@ func mockTelegramServer(t *testing.T) (*httptest.Server, *tgbotapi.BotAPI) {
 				},
 			})
 		case strings.HasSuffix(path, "/sendChatAction"):
+			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": true})
 		default:
+			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": true})
 		}
 	}))
@@ -1192,14 +1198,8 @@ func TestHandleMessagePhoto(t *testing.T) {
 	if inbound.Content != "Look at this" {
 		t.Errorf("content = %q, want %q", inbound.Content, "Look at this")
 	}
-	if len(inbound.Media) != 1 {
-		t.Fatalf("expected 1 photo media item, got %d", len(inbound.Media))
-	}
-	if inbound.Media[0].Type != "image" {
-		t.Errorf("media type = %q, want image", inbound.Media[0].Type)
-	}
-	if inbound.Media[0].URL == "" {
-		t.Error("photo media URL should not be empty")
+	if len(inbound.Media) != 0 {
+		t.Fatalf("expected photo media to be ignored, got %d item(s)", len(inbound.Media))
 	}
 }
 

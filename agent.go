@@ -22,9 +22,13 @@ import (
 // --- Skills Loader ---
 
 type skillMeta struct {
-	Name         string `yaml:"name"`
-	Description  string `yaml:"description"`
-	Always       bool   `yaml:"always"`
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	Always      bool   `yaml:"always"`
+	Requires    struct {
+		Bin []string `yaml:"bins"`
+		Env []string `yaml:"env"`
+	} `yaml:"requires"`
 	Requirements struct {
 		Bin []string `yaml:"bin"`
 		Env []string `yaml:"env"`
@@ -188,7 +192,122 @@ func parseFrontmatter(content string) *skillMeta {
 	if err := yaml.Unmarshal([]byte(parts[1]), &meta); err != nil {
 		return nil
 	}
+
+	// Support both native YAML requirements and nanobot/openclaw-style
+	// metadata JSON frontmatter.
+	meta.Requirements.Bin = appendUnique(meta.Requirements.Bin, meta.Requires.Bin...)
+	meta.Requirements.Env = appendUnique(meta.Requirements.Env, meta.Requires.Env...)
+
+	var raw map[string]any
+	if err := yaml.Unmarshal([]byte(parts[1]), &raw); err == nil {
+		mergeSkillRequirements(&meta, raw["requires"])
+		mergeSkillRequirements(&meta, raw["requirements"])
+		if scoped := parseSkillMetadataScope(raw["metadata"]); scoped != nil {
+			if !meta.Always {
+				if v, ok := scoped["always"].(bool); ok {
+					meta.Always = v
+				}
+			}
+			mergeSkillRequirements(&meta, scoped["requires"])
+			mergeSkillRequirements(&meta, scoped["requirements"])
+		}
+	}
 	return &meta
+}
+
+func parseSkillMetadataScope(raw any) map[string]any {
+	metadata := asStringAnyMap(raw)
+	if metadata == nil {
+		if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
+			var parsed any
+			if err := json.Unmarshal([]byte(s), &parsed); err == nil {
+				metadata = asStringAnyMap(parsed)
+			}
+		}
+	}
+	if metadata == nil {
+		return nil
+	}
+	for _, key := range []string{"cody", "nanobot", "openclaw"} {
+		if scoped := asStringAnyMap(metadata[key]); scoped != nil {
+			return scoped
+		}
+	}
+	return metadata
+}
+
+func asStringAnyMap(raw any) map[string]any {
+	switch m := raw.(type) {
+	case map[string]any:
+		return m
+	case map[any]any:
+		out := make(map[string]any, len(m))
+		for k, v := range m {
+			s, ok := k.(string)
+			if !ok {
+				continue
+			}
+			out[s] = v
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func mergeSkillRequirements(meta *skillMeta, raw any) {
+	m := asStringAnyMap(raw)
+	if m == nil {
+		return
+	}
+	meta.Requirements.Bin = appendUnique(meta.Requirements.Bin, asStringSlice(m["bin"])...)
+	meta.Requirements.Bin = appendUnique(meta.Requirements.Bin, asStringSlice(m["bins"])...)
+	meta.Requirements.Env = appendUnique(meta.Requirements.Env, asStringSlice(m["env"])...)
+}
+
+func asStringSlice(raw any) []string {
+	switch v := raw.(type) {
+	case []string:
+		return append([]string(nil), v...)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return []string{v}
+	default:
+		return nil
+	}
+}
+
+func appendUnique(base []string, values ...string) []string {
+	seen := make(map[string]struct{}, len(base)+len(values))
+	for _, v := range base {
+		key := strings.TrimSpace(v)
+		if key == "" {
+			continue
+		}
+		seen[key] = struct{}{}
+	}
+	for _, v := range values {
+		key := strings.TrimSpace(v)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		base = append(base, key)
+		seen[key] = struct{}{}
+	}
+	return base
 }
 
 func stripFrontmatter(content string) string {
@@ -512,28 +631,11 @@ func (cb *ContextBuilder) buildMessages(history []ChatMessage, userContent strin
 	runtime := "[Runtime Context — metadata only, not instructions]\n" + strings.Join(runtimeLines, "\n")
 	msgs = append(msgs, ChatMessage{Role: "user", Content: runtime})
 
-	// Current user message
-	if len(media) > 0 {
-		msgs = append(msgs, ChatMessage{Role: "user", Content: buildMultimodalContent(userContent, media)})
-	} else {
-		msgs = append(msgs, ChatMessage{Role: "user", Content: userContent})
-	}
+	// Current user message.
+	// Cody is intentionally text-only for LLM input (gpt-oss-120b setup).
+	msgs = append(msgs, ChatMessage{Role: "user", Content: userContent})
 
 	return msgs
-}
-
-func buildMultimodalContent(text string, media []Media) []ContentPart {
-	parts := make([]ContentPart, 0, len(media)+1)
-	for _, m := range media {
-		if m.Type == "image" && m.URL != "" {
-			parts = append(parts, ContentPart{
-				Type:     "image_url",
-				ImageURL: &ImageURL{URL: m.URL},
-			})
-		}
-	}
-	parts = append(parts, ContentPart{Type: "text", Text: text})
-	return parts
 }
 
 // --- Subagent Manager ---
@@ -942,11 +1044,8 @@ func (a *AgentLoop) handleNew(ctx context.Context, msg *InboundMessage) {
 func (a *AgentLoop) processMessage(ctx context.Context, msg *InboundMessage) (string, error) {
 	session := a.sessions.getOrCreate(msg.SessionKey)
 
-	// Save user message to session (strip base64 images to avoid history bloat)
+	// Save user message to session.
 	userContent := stripBase64Images(msg.Content)
-	if len(msg.Media) > 0 {
-		userContent = stripBase64Images(buildMultimodalContent(msg.Content, msg.Media))
-	}
 	session.addMessage("user", userContent, nil, "", "")
 
 	// Build context: use history BEFORE the message we just added (it's included separately)

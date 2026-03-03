@@ -77,6 +77,52 @@ Content here.`
 	}
 }
 
+func TestParseFrontmatterMetadataJSON(t *testing.T) {
+	content := `---
+name: github
+description: GitHub helper
+metadata: {"nanobot":{"requires":{"bins":["gh"],"env":["GITHUB_TOKEN"]}}}
+---
+
+Body`
+
+	meta := parseFrontmatter(content)
+	if meta == nil {
+		t.Fatal("expected non-nil meta")
+	}
+	if got := meta.Requirements.Bin; len(got) != 1 || got[0] != "gh" {
+		t.Fatalf("requirements.bin = %v, want [gh]", got)
+	}
+	if got := meta.Requirements.Env; len(got) != 1 || got[0] != "GITHUB_TOKEN" {
+		t.Fatalf("requirements.env = %v, want [GITHUB_TOKEN]", got)
+	}
+}
+
+func TestParseFrontmatterRequiresAlias(t *testing.T) {
+	content := `---
+name: tmux
+description: tmux helper
+requires:
+  bins:
+    - tmux
+  env:
+    - TMUX_TMPDIR
+---
+
+Body`
+
+	meta := parseFrontmatter(content)
+	if meta == nil {
+		t.Fatal("expected non-nil meta")
+	}
+	if got := meta.Requirements.Bin; len(got) != 1 || got[0] != "tmux" {
+		t.Fatalf("requirements.bin = %v, want [tmux]", got)
+	}
+	if got := meta.Requirements.Env; len(got) != 1 || got[0] != "TMUX_TMPDIR" {
+		t.Fatalf("requirements.env = %v, want [TMUX_TMPDIR]", got)
+	}
+}
+
 func TestStripFrontmatter(t *testing.T) {
 	content := `---
 name: test
@@ -346,36 +392,12 @@ func TestContextBuilderWithMedia(t *testing.T) {
 	if lastMsg.Role != "user" {
 		t.Error("last message should be user")
 	}
-
-	// Content should be multimodal ([]ContentPart)
-	parts, ok := lastMsg.Content.([]ContentPart)
+	content, ok := lastMsg.Content.(string)
 	if !ok {
-		t.Fatalf("expected []ContentPart, got %T", lastMsg.Content)
+		t.Fatalf("expected text-only user content, got %T", lastMsg.Content)
 	}
-	if len(parts) != 2 {
-		t.Errorf("expected 2 content parts, got %d", len(parts))
-	}
-}
-
-func TestBuildMultimodalContent(t *testing.T) {
-	media := []Media{
-		{Type: "image", URL: "https://example.com/a.jpg"},
-		{Type: "document", Data: []byte("data")}, // non-image should be skipped
-		{Type: "image", URL: "https://example.com/b.jpg"},
-	}
-
-	parts := buildMultimodalContent("caption", media)
-	if len(parts) != 3 { // 2 images + text
-		t.Errorf("expected 3 parts, got %d", len(parts))
-	}
-	if parts[0].Type != "image_url" {
-		t.Error("first part should be image_url")
-	}
-	if parts[1].Type != "image_url" {
-		t.Error("second part should be image_url")
-	}
-	if parts[2].Type != "text" || parts[2].Text != "caption" {
-		t.Error("last part should be text caption")
+	if content != "check this image" {
+		t.Fatalf("expected plain text content, got %q", content)
 	}
 }
 
