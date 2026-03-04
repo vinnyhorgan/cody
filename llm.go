@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -84,6 +85,8 @@ type LLMClient struct {
 	apiBase string
 	model   string
 	client  *http.Client
+	// providers is optional. When present, chat() tries them in order.
+	providers []llmProvider
 }
 
 func newLLMClient(apiKey, apiBase, model string) *LLMClient {
@@ -95,14 +98,94 @@ func newLLMClient(apiKey, apiBase, model string) *LLMClient {
 	}
 }
 
+func newLLMClientFromConfig(cfg *Config) *LLMClient {
+	if cfg == nil {
+		return newLLMClient("", "", "")
+	}
+	client := newLLMClient(cfg.cerebrasAPIKey(), cfg.APIBase, cfg.Model)
+	client.providers = buildLLMProviders(cfg)
+	return client
+}
+
+type llmProvider struct {
+	name    string
+	apiKey  string
+	apiBase string
+	model   string
+}
+
+const (
+	cerebrasAPIBase   = "https://api.cerebras.ai/v1"
+	groqAPIBase       = "https://api.groq.com/openai/v1"
+	openRouterAPIBase = "https://openrouter.ai/api/v1"
+)
+
+func buildLLMProviders(cfg *Config) []llmProvider {
+	model := strings.TrimSpace(cfg.Model)
+	if isManagedGPTOSSModel(model) {
+		return compactLLMProviders([]llmProvider{
+			{name: "groq", apiKey: cfg.Groq.APIKey, apiBase: groqAPIBase, model: "gpt-oss-120b"},
+			{name: "cerebras", apiKey: cfg.cerebrasAPIKey(), apiBase: cerebrasAPIBase, model: "gpt-oss-120b"},
+			{name: "openrouter", apiKey: cfg.OpenRouter.APIKey, apiBase: openRouterAPIBase, model: "openai/gpt-oss-120b:free"},
+		})
+	}
+	return compactLLMProviders([]llmProvider{
+		{name: "default", apiKey: cfg.cerebrasAPIKey(), apiBase: cfg.APIBase, model: cfg.Model},
+	})
+}
+
+func compactLLMProviders(providers []llmProvider) []llmProvider {
+	out := make([]llmProvider, 0, len(providers))
+	seen := make(map[string]struct{}, len(providers))
+	for _, p := range providers {
+		p.apiKey = strings.TrimSpace(p.apiKey)
+		p.apiBase = strings.TrimSpace(p.apiBase)
+		p.model = strings.TrimSpace(p.model)
+		if p.apiKey == "" || p.apiBase == "" {
+			continue
+		}
+		identity := p.apiBase + "|" + p.model + "|" + p.apiKey
+		if _, ok := seen[identity]; ok {
+			continue
+		}
+		seen[identity] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
+func isManagedGPTOSSModel(model string) bool {
+	name := strings.ToLower(strings.TrimSpace(model))
+	name = strings.TrimPrefix(name, "openrouter/")
+	name = strings.TrimPrefix(name, "openai/")
+	return strings.HasPrefix(name, "gpt-oss-120b")
+}
+
+func (c *LLMClient) providerChain() []llmProvider {
+	if len(c.providers) > 0 {
+		return c.providers
+	}
+	return compactLLMProviders([]llmProvider{
+		{name: "default", apiKey: c.apiKey, apiBase: c.apiBase, model: c.model},
+	})
+}
+
 func (c *LLMClient) requestModel() string {
-	model := strings.TrimSpace(c.model)
+	return c.requestModelFor(llmProvider{
+		apiKey:  c.apiKey,
+		apiBase: c.apiBase,
+		model:   c.model,
+	})
+}
+
+func (c *LLMClient) requestModelFor(provider llmProvider) string {
+	model := strings.TrimSpace(provider.model)
 	if model == "" {
 		return model
 	}
 	// Accept nanobot/litellm-style "openrouter/<model>" when calling OpenRouter
 	// directly through its OpenAI-compatible API.
-	isOpenRouter := strings.Contains(strings.ToLower(c.apiBase), "openrouter") || strings.HasPrefix(c.apiKey, "sk-or-")
+	isOpenRouter := strings.Contains(strings.ToLower(provider.apiBase), "openrouter") || strings.HasPrefix(provider.apiKey, "sk-or-")
 	if isOpenRouter && strings.HasPrefix(model, "openrouter/") {
 		return strings.TrimPrefix(model, "openrouter/")
 	}
@@ -110,8 +193,28 @@ func (c *LLMClient) requestModel() string {
 }
 
 func (c *LLMClient) chat(ctx context.Context, messages []ChatMessage, tools []ToolDef, maxTokens int, temperature float64, reasoningEffort string) (*LLMResponse, error) {
+	providers := c.providerChain()
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("no configured LLM providers")
+	}
+	var lastErr error
+	for _, provider := range providers {
+		resp, err := c.chatWithProvider(ctx, provider, messages, tools, maxTokens, temperature, reasoningEffort)
+		if err == nil {
+			return resp, nil
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		lastErr = err
+		slog.Warn("LLM provider failed, trying next provider", "provider", provider.name, "err", err)
+	}
+	return nil, fmt.Errorf("all configured LLM providers failed: %w", lastErr)
+}
+
+func (c *LLMClient) chatWithProvider(ctx context.Context, provider llmProvider, messages []ChatMessage, tools []ToolDef, maxTokens int, temperature float64, reasoningEffort string) (*LLMResponse, error) {
 	req := chatRequest{
-		Model:    c.requestModel(),
+		Model:    c.requestModelFor(provider),
 		Messages: sanitizeMessages(messages),
 	}
 	if len(tools) > 0 {
@@ -133,19 +236,19 @@ func (c *LLMClient) chat(ctx context.Context, messages []ChatMessage, tools []To
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := c.apiBase + "/chat/completions"
+	url := strings.TrimRight(provider.apiBase, "/") + "/chat/completions"
 	for attempt := range 3 {
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
 			return nil, fmt.Errorf("create request: %w", err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+		httpReq.Header.Set("Authorization", "Bearer "+provider.apiKey)
 
 		resp, err := c.client.Do(httpReq)
 		if err != nil {
 			if attempt < 2 {
-				slog.Warn("LLM request failed, retrying", "attempt", attempt+1, "err", err)
+				slog.Warn("LLM request failed, retrying", "provider", provider.name, "attempt", attempt+1, "err", err)
 				if !sleepWithContext(ctx, time.Duration(1<<uint(attempt))*time.Second) {
 					return nil, fmt.Errorf("LLM request canceled: %w", ctx.Err())
 				}
@@ -158,7 +261,7 @@ func (c *LLMClient) chat(ctx context.Context, messages []ChatMessage, tools []To
 		resp.Body.Close()
 		if readErr != nil {
 			if attempt < 2 {
-				slog.Warn("LLM response read failed, retrying", "attempt", attempt+1, "err", readErr)
+				slog.Warn("LLM response read failed, retrying", "provider", provider.name, "attempt", attempt+1, "err", readErr)
 				if !sleepWithContext(ctx, time.Duration(1<<uint(attempt))*time.Second) {
 					return nil, fmt.Errorf("LLM request canceled: %w", ctx.Err())
 				}
@@ -168,7 +271,7 @@ func (c *LLMClient) chat(ctx context.Context, messages []ChatMessage, tools []To
 		}
 
 		if resp.StatusCode >= 500 && attempt < 2 {
-			slog.Warn("LLM server error, retrying", "status", resp.StatusCode, "attempt", attempt+1)
+			slog.Warn("LLM server error, retrying", "provider", provider.name, "status", resp.StatusCode, "attempt", attempt+1)
 			if !sleepWithContext(ctx, time.Duration(1<<uint(attempt))*time.Second) {
 				return nil, fmt.Errorf("LLM request canceled: %w", ctx.Err())
 			}

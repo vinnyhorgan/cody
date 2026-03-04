@@ -53,6 +53,7 @@ func TestConfigValidation(t *testing.T) {
 		t.Error("expected validation error for empty config")
 	}
 
+	cfg.Model = "custom-model"
 	cfg.APIKey = "test-key"
 	if err := cfg.validate(); err == nil {
 		t.Error("expected validation error for missing telegram token")
@@ -68,6 +69,22 @@ func TestConfigValidation(t *testing.T) {
 	cfg.Cerebras.APIKey = "csk-test"
 	if err := cfg.validate(); err != nil {
 		t.Errorf("expected no error with cerebras.api_key, got: %v", err)
+	}
+}
+
+func TestConfigValidationManagedGPTOSSRequiresAllProviders(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Telegram.Token = "bot-token"
+	cfg.Cerebras.APIKey = "csk-test"
+	cfg.OpenRouter.APIKey = "sk-or-test"
+
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected validation error when groq key is missing")
+	}
+
+	cfg.Groq.APIKey = "gsk-test"
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("expected no error with all gpt-oss providers configured, got: %v", err)
 	}
 }
 
@@ -223,6 +240,7 @@ func TestLoadConfigEnvFallbacks(t *testing.T) {
 	t.Setenv("CODY_MODEL", "gpt-oss-120b")
 	t.Setenv("TELEGRAM_BOT_TOKEN", "telegram-test")
 	t.Setenv("GROQ_API_KEY", "gsk-test")
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
 	t.Setenv("BRAVE_API_KEY", "brave-test")
 
 	cfg, err := loadConfig()
@@ -243,6 +261,9 @@ func TestLoadConfigEnvFallbacks(t *testing.T) {
 	}
 	if cfg.Groq.APIKey != "gsk-test" {
 		t.Errorf("Groq.APIKey = %q, want %q", cfg.Groq.APIKey, "gsk-test")
+	}
+	if cfg.OpenRouter.APIKey != "sk-or-test" {
+		t.Errorf("OpenRouter.APIKey = %q, want %q", cfg.OpenRouter.APIKey, "sk-or-test")
 	}
 	if cfg.Tools.WebSearchAPIKey != "brave-test" {
 		t.Errorf("Tools.WebSearchAPIKey = %q, want %q", cfg.Tools.WebSearchAPIKey, "brave-test")
@@ -294,5 +315,19 @@ func TestLoadConfigSupportsCerebrasAPIKeyInFile(t *testing.T) {
 	}
 	if cfg.APIKey != "from-cerebras-field" {
 		t.Errorf("APIKey = %q, want %q", cfg.APIKey, "from-cerebras-field")
+	}
+}
+
+func TestLoadConfigSupportsOpenRouterEnvFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if cfg.OpenRouter.APIKey != "sk-or-test" {
+		t.Errorf("OpenRouter.APIKey = %q, want %q", cfg.OpenRouter.APIKey, "sk-or-test")
 	}
 }

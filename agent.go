@@ -1109,6 +1109,8 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg *InboundMessage) (st
 // progressFunc is called with intermediate updates during the agent loop.
 type progressFunc func(content string, toolHint bool)
 
+const llmUnavailableMessage = "Sorry, I couldn't complete that request right now. Please try again in a moment."
+
 func (a *AgentLoop) runLoop(ctx context.Context, messages []ChatMessage, onProgress progressFunc) (string, []ChatMessage) {
 	tools := a.tools.schemas()
 	maxIter := a.config.Agent.MaxIterations
@@ -1117,7 +1119,7 @@ func (a *AgentLoop) runLoop(ctx context.Context, messages []ChatMessage, onProgr
 		resp, err := a.llm.chat(ctx, messages, tools, a.config.Agent.MaxTokens, a.config.Agent.Temperature, a.config.Agent.ReasoningEffort)
 		if err != nil {
 			slog.Error("LLM call failed", "iteration", i, "err", err)
-			return fmt.Sprintf("I encountered an error: %v", err), messages
+			return llmUnavailableMessage, messages
 		}
 
 		slog.Info("LLM response",
@@ -1129,7 +1131,7 @@ func (a *AgentLoop) runLoop(ctx context.Context, messages []ChatMessage, onProgr
 		// permanent 400 loops (matching nanobot #1303 fix).
 		if resp.FinishReason == "error" {
 			slog.Error("LLM returned error finish_reason", "iteration", i)
-			return "Sorry, I encountered an error calling the AI model.", messages
+			return llmUnavailableMessage, messages
 		}
 
 		if len(resp.ToolCalls) == 0 {
@@ -1176,7 +1178,7 @@ func shouldPersistAssistant(content string) bool {
 	if strings.HasPrefix(content, "I encountered an error:") {
 		return false
 	}
-	if content == "Sorry, I encountered an error calling the AI model." {
+	if content == llmUnavailableMessage {
 		return false
 	}
 	return true

@@ -607,8 +607,8 @@ func TestRunLoopErrorFinishReason(t *testing.T) {
 	messages := []ChatMessage{{Role: "user", Content: "hi"}}
 	content, msgs := agent.runLoop(context.Background(), messages, nil)
 
-	if !strings.Contains(content, "error") {
-		t.Errorf("expected error message, got: %q", content)
+	if content != llmUnavailableMessage {
+		t.Errorf("expected %q, got: %q", llmUnavailableMessage, content)
 	}
 	// Messages should not include the error response (poison prevention)
 	if len(msgs) != 1 {
@@ -1288,7 +1288,7 @@ func TestProcessMessageDoesNotPersistTransportError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("processMessage returned error: %v", err)
 	}
-	if !strings.Contains(result, "I encountered an error") {
+	if result != llmUnavailableMessage {
 		t.Fatalf("unexpected result: %q", result)
 	}
 

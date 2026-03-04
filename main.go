@@ -87,7 +87,7 @@ func runGateway() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	llm := newLLMClient(cfg.APIKey, cfg.APIBase, cfg.Model)
+	llm := newLLMClientFromConfig(cfg)
 	bus := newMessageBus()
 	sessions := newSessionManager(workspace)
 	tools := newToolRegistry()
@@ -175,11 +175,12 @@ func runOnboard() {
 	fmt.Printf(`
 Next steps:
   1. Edit %s and set:
-     - api_key (or cerebras.api_key): Your LLM API key (or set CEREBRAS_API_KEY env var)
-     - api_base: Your OpenAI-compatible API endpoint (Cerebras: https://api.cerebras.ai/v1)
+     - groq.api_key: Groq API key (preferred gpt-oss-120b provider + voice transcription)
+     - cerebras.api_key: Cerebras API key
+     - openrouter.api_key: OpenRouter API key
      - telegram.token: Your Telegram bot token (from @BotFather)
      - telegram.allow_from: ["your_telegram_user_id"]
-     - groq.api_key: Your Groq API key (for voice messages)
+     - model: gpt-oss-120b (default, uses automatic failover: groq -> cerebras -> openrouter)
 
   2. Run: cody
 `, configPath())
@@ -214,17 +215,34 @@ func runStatus() {
 
 	fmt.Printf("Model:     %s\n", cfg.Model)
 
-	// API key
-	if cfg.APIKey != "" {
-		masked := maskAPIKey(cfg.APIKey)
-		fmt.Printf("API Key:   %s ✓\n", masked)
+	if isManagedGPTOSSModel(cfg.Model) {
+		fmt.Printf("LLM Mode:  failover (groq -> cerebras -> openrouter)\n")
+		if cfg.Groq.APIKey != "" {
+			fmt.Printf("Groq:      %s ✓ (chat + voice)\n", maskAPIKey(cfg.Groq.APIKey))
+		} else {
+			fmt.Printf("Groq:      not set ✗\n")
+		}
+		if key := cfg.cerebrasAPIKey(); key != "" {
+			fmt.Printf("Cerebras:  %s ✓\n", maskAPIKey(key))
+		} else {
+			fmt.Printf("Cerebras:  not set ✗\n")
+		}
+		if cfg.OpenRouter.APIKey != "" {
+			fmt.Printf("OpenRouter: %s ✓\n", maskAPIKey(cfg.OpenRouter.APIKey))
+		} else {
+			fmt.Printf("OpenRouter: not set ✗\n")
+		}
 	} else {
-		fmt.Printf("API Key:   not set ✗\n")
-	}
-	if cfg.APIBase != "" {
-		fmt.Printf("API Base:  %s ✓\n", cfg.APIBase)
-	} else {
-		fmt.Printf("API Base:  not set ✗\n")
+		if key := cfg.cerebrasAPIKey(); key != "" {
+			fmt.Printf("API Key:   %s ✓\n", maskAPIKey(key))
+		} else {
+			fmt.Printf("API Key:   not set ✗\n")
+		}
+		if cfg.APIBase != "" {
+			fmt.Printf("API Base:  %s ✓\n", cfg.APIBase)
+		} else {
+			fmt.Printf("API Base:  not set ✗\n")
+		}
 	}
 
 	// Telegram
@@ -234,11 +252,11 @@ func runStatus() {
 		fmt.Printf("Telegram:  not configured ✗\n")
 	}
 
-	// Groq
+	// Groq voice path
 	if cfg.Groq.APIKey != "" {
-		fmt.Printf("Groq:      configured ✓ (voice transcription)\n")
+		fmt.Printf("Voice:     configured ✓ (Groq Whisper)\n")
 	} else {
-		fmt.Printf("Groq:      not set (voice disabled)\n")
+		fmt.Printf("Voice:     not set (voice disabled)\n")
 	}
 
 	// Brave Search
@@ -334,7 +352,7 @@ Without -m, starts an interactive session.`)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	llm := newLLMClient(cfg.APIKey, cfg.APIBase, cfg.Model)
+	llm := newLLMClientFromConfig(cfg)
 	bus := newMessageBus()
 	sessions := newSessionManager(workspace)
 	tools := newToolRegistry()
@@ -661,7 +679,7 @@ func cronRun() {
 		os.Exit(1)
 	}
 
-	llm := newLLMClient(cfg.APIKey, cfg.APIBase, cfg.Model)
+	llm := newLLMClientFromConfig(cfg)
 	bus := newMessageBus()
 	sessions := newSessionManager(workspace)
 	tools := newToolRegistry()

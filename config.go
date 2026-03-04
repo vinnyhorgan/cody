@@ -9,16 +9,17 @@ import (
 )
 
 type Config struct {
-	APIKey    string          `json:"api_key"`
-	APIBase   string          `json:"api_base"`
-	Model     string          `json:"model"`
-	Telegram  TelegramConfig  `json:"telegram"`
-	Workspace string          `json:"workspace"`
-	Tools     ToolsConfig     `json:"tools"`
-	Heartbeat HeartbeatConfig `json:"heartbeat"`
-	Agent     AgentConfig     `json:"agent"`
-	Groq      GroqConfig      `json:"groq"`
-	Cerebras  CerebrasConfig  `json:"cerebras"`
+	APIKey     string           `json:"api_key,omitempty"`
+	APIBase    string           `json:"api_base"`
+	Model      string           `json:"model"`
+	Telegram   TelegramConfig   `json:"telegram"`
+	Workspace  string           `json:"workspace"`
+	Tools      ToolsConfig      `json:"tools"`
+	Heartbeat  HeartbeatConfig  `json:"heartbeat"`
+	Agent      AgentConfig      `json:"agent"`
+	Groq       GroqConfig       `json:"groq"`
+	Cerebras   CerebrasConfig   `json:"cerebras"`
+	OpenRouter OpenRouterConfig `json:"openrouter"`
 }
 
 type TelegramConfig struct {
@@ -54,6 +55,10 @@ type GroqConfig struct {
 }
 
 type CerebrasConfig struct {
+	APIKey string `json:"api_key"`
+}
+
+type OpenRouterConfig struct {
 	APIKey string `json:"api_key"`
 }
 
@@ -113,11 +118,14 @@ func loadConfig() (*Config, error) {
 }
 
 func (c *Config) applyEnvFallbacks() {
-	if strings.TrimSpace(c.APIKey) == "" {
-		c.APIKey = strings.TrimSpace(c.Cerebras.APIKey)
+	if strings.TrimSpace(c.Cerebras.APIKey) == "" {
+		c.Cerebras.APIKey = strings.TrimSpace(c.APIKey)
+	}
+	if strings.TrimSpace(c.Cerebras.APIKey) == "" {
+		c.Cerebras.APIKey = firstNonEmptyEnv("CEREBRAS_API_KEY", "CODY_API_KEY", "OPENAI_API_KEY")
 	}
 	if strings.TrimSpace(c.APIKey) == "" {
-		c.APIKey = firstNonEmptyEnv("CODY_API_KEY", "CEREBRAS_API_KEY", "OPENAI_API_KEY")
+		c.APIKey = strings.TrimSpace(c.Cerebras.APIKey)
 	}
 	if strings.TrimSpace(c.APIBase) == "" {
 		c.APIBase = firstNonEmptyEnv("CODY_API_BASE", "OPENAI_API_BASE")
@@ -130,6 +138,9 @@ func (c *Config) applyEnvFallbacks() {
 	}
 	if strings.TrimSpace(c.Groq.APIKey) == "" {
 		c.Groq.APIKey = firstNonEmptyEnv("GROQ_API_KEY")
+	}
+	if strings.TrimSpace(c.OpenRouter.APIKey) == "" {
+		c.OpenRouter.APIKey = firstNonEmptyEnv("OPENROUTER_API_KEY", "OPEN_ROUTER_API_KEY")
 	}
 	if strings.TrimSpace(c.Tools.WebSearchAPIKey) == "" {
 		c.Tools.WebSearchAPIKey = firstNonEmptyEnv("BRAVE_API_KEY")
@@ -151,13 +162,14 @@ func (c *Config) workspacePath() string {
 }
 
 func (c *Config) validate() error {
-	if strings.TrimSpace(c.APIKey) == "" {
-		c.APIKey = strings.TrimSpace(c.Cerebras.APIKey)
-	}
-	if c.APIKey == "" {
+	if isManagedGPTOSSModel(c.Model) {
+		if err := c.validateManagedGPTOSSProviders(); err != nil {
+			return err
+		}
+	} else if c.cerebrasAPIKey() == "" {
 		return fmt.Errorf("api_key (or cerebras.api_key) is required")
 	}
-	if c.APIBase == "" {
+	if !isManagedGPTOSSModel(c.Model) && strings.TrimSpace(c.APIBase) == "" {
 		return fmt.Errorf("api_base is required")
 	}
 	if c.Telegram.Token == "" {
@@ -168,14 +180,35 @@ func (c *Config) validate() error {
 
 // validateAgent checks only LLM config (no Telegram token needed for CLI-only usage).
 func (c *Config) validateAgent() error {
-	if strings.TrimSpace(c.APIKey) == "" {
-		c.APIKey = strings.TrimSpace(c.Cerebras.APIKey)
-	}
-	if c.APIKey == "" {
+	if isManagedGPTOSSModel(c.Model) {
+		if err := c.validateManagedGPTOSSProviders(); err != nil {
+			return err
+		}
+	} else if c.cerebrasAPIKey() == "" {
 		return fmt.Errorf("api_key (or cerebras.api_key) is required")
 	}
-	if c.APIBase == "" {
+	if !isManagedGPTOSSModel(c.Model) && strings.TrimSpace(c.APIBase) == "" {
 		return fmt.Errorf("api_base is required")
+	}
+	return nil
+}
+
+func (c *Config) cerebrasAPIKey() string {
+	if strings.TrimSpace(c.Cerebras.APIKey) != "" {
+		return strings.TrimSpace(c.Cerebras.APIKey)
+	}
+	return strings.TrimSpace(c.APIKey)
+}
+
+func (c *Config) validateManagedGPTOSSProviders() error {
+	if strings.TrimSpace(c.Groq.APIKey) == "" {
+		return fmt.Errorf("groq.api_key is required for gpt-oss-120b failover mode")
+	}
+	if c.cerebrasAPIKey() == "" {
+		return fmt.Errorf("cerebras.api_key (or api_key) is required for gpt-oss-120b failover mode")
+	}
+	if strings.TrimSpace(c.OpenRouter.APIKey) == "" {
+		return fmt.Errorf("openrouter.api_key is required for gpt-oss-120b failover mode")
 	}
 	return nil
 }

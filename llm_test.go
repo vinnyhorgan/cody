@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -382,5 +383,134 @@ func TestRequestModelNonOpenRouterUnchanged(t *testing.T) {
 	client := newLLMClient("sk-test", "https://api.example.com/v1", "openrouter/gpt-oss-120b")
 	if got := client.requestModel(); got != "openrouter/gpt-oss-120b" {
 		t.Fatalf("requestModel() = %q, want unchanged model", got)
+	}
+}
+
+func TestBuildLLMProvidersManagedOrder(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Model = "gpt-oss-120b"
+	cfg.Groq.APIKey = "gsk-test"
+	cfg.Cerebras.APIKey = "csk-test"
+	cfg.OpenRouter.APIKey = "sk-or-test"
+
+	providers := buildLLMProviders(cfg)
+	if len(providers) != 3 {
+		t.Fatalf("provider count = %d, want 3", len(providers))
+	}
+	if providers[0].name != "groq" {
+		t.Fatalf("providers[0] = %q, want groq", providers[0].name)
+	}
+	if providers[1].name != "cerebras" {
+		t.Fatalf("providers[1] = %q, want cerebras", providers[1].name)
+	}
+	if providers[2].name != "openrouter" {
+		t.Fatalf("providers[2] = %q, want openrouter", providers[2].name)
+	}
+	if providers[2].model != "openai/gpt-oss-120b:free" {
+		t.Fatalf("openrouter model = %q, want %q", providers[2].model, "openai/gpt-oss-120b:free")
+	}
+}
+
+func TestBuildLLMProvidersDefaultMode(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Model = "custom-model"
+	cfg.APIBase = "https://api.example.com/v1"
+	cfg.APIKey = "sk-custom"
+
+	providers := buildLLMProviders(cfg)
+	if len(providers) != 1 {
+		t.Fatalf("provider count = %d, want 1", len(providers))
+	}
+	if providers[0].name != "default" {
+		t.Fatalf("provider name = %q, want default", providers[0].name)
+	}
+	if providers[0].apiBase != "https://api.example.com/v1" {
+		t.Fatalf("provider apiBase = %q", providers[0].apiBase)
+	}
+}
+
+func TestLLMClientChatProviderFallback(t *testing.T) {
+	var groqCalls atomic.Int32
+	groqSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		groqCalls.Add(1)
+		w.WriteHeader(429)
+		w.Write([]byte(`{"error":"rate limit"}`))
+	}))
+	defer groqSrv.Close()
+
+	var cerebrasCalls atomic.Int32
+	cerebrasSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cerebrasCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{
+				Message:      ChatMessage{Role: "assistant", Content: "fallback worked"},
+				FinishReason: "stop",
+			}},
+		})
+	}))
+	defer cerebrasSrv.Close()
+
+	client := newLLMClient("unused", "http://unused", "ignored")
+	client.providers = []llmProvider{
+		{name: "groq", apiKey: "gsk-test", apiBase: groqSrv.URL, model: "gpt-oss-120b"},
+		{name: "cerebras", apiKey: "csk-test", apiBase: cerebrasSrv.URL, model: "gpt-oss-120b"},
+	}
+
+	resp, err := client.chat(context.Background(), []ChatMessage{
+		{Role: "user", Content: "hello"},
+	}, nil, 256, 0.1, "")
+	if err != nil {
+		t.Fatalf("chat() error = %v", err)
+	}
+	if resp.Content != "fallback worked" {
+		t.Fatalf("content = %q, want %q", resp.Content, "fallback worked")
+	}
+	if groqCalls.Load() != 1 {
+		t.Fatalf("groq calls = %d, want 1", groqCalls.Load())
+	}
+	if cerebrasCalls.Load() != 1 {
+		t.Fatalf("cerebras calls = %d, want 1", cerebrasCalls.Load())
+	}
+}
+
+func TestLLMClientChatAllProvidersFail(t *testing.T) {
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		w.Write([]byte(`{"error":"bad key"}`))
+	}))
+	defer failSrv.Close()
+
+	client := newLLMClient("unused", "http://unused", "ignored")
+	client.providers = []llmProvider{
+		{name: "groq", apiKey: "gsk-test", apiBase: failSrv.URL, model: "gpt-oss-120b"},
+		{name: "cerebras", apiKey: "csk-test", apiBase: failSrv.URL, model: "gpt-oss-120b"},
+	}
+
+	_, err := client.chat(context.Background(), []ChatMessage{
+		{Role: "user", Content: "hello"},
+	}, nil, 256, 0.1, "")
+	if err == nil {
+		t.Fatal("expected error when all providers fail")
+	}
+	if got := err.Error(); got == "" || !strings.Contains(got, "all configured LLM providers failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestIsManagedGPTOSSModel(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{model: "gpt-oss-120b", want: true},
+		{model: "openrouter/gpt-oss-120b", want: true},
+		{model: "openai/gpt-oss-120b:free", want: true},
+		{model: "gpt-4o", want: false},
+	}
+	for _, tt := range tests {
+		if got := isManagedGPTOSSModel(tt.model); got != tt.want {
+			t.Fatalf("isManagedGPTOSSModel(%q) = %v, want %v", tt.model, got, tt.want)
+		}
 	}
 }
