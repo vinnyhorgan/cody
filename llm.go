@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -87,6 +88,10 @@ type LLMClient struct {
 	client  *http.Client
 	// providers is optional. When present, chat() tries them in order.
 	providers []llmProvider
+	// disabledProviders tracks provider identities disabled for this process
+	// after a permanent API error (for example model_not_found).
+	disabledMu        sync.RWMutex
+	disabledProviders map[string]string
 }
 
 func newLLMClient(apiKey, apiBase, model string) *LLMClient {
@@ -114,6 +119,15 @@ type llmProvider struct {
 	model   string
 }
 
+type llmAPIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *llmAPIError) Error() string {
+	return fmt.Sprintf("LLM API error %d: %s", e.StatusCode, e.Body)
+}
+
 const (
 	cerebrasAPIBase   = "https://api.cerebras.ai/v1"
 	groqAPIBase       = "https://api.groq.com/openai/v1"
@@ -124,7 +138,7 @@ func buildLLMProviders(cfg *Config) []llmProvider {
 	model := strings.TrimSpace(cfg.Model)
 	if isManagedGPTOSSModel(model) {
 		return compactLLMProviders([]llmProvider{
-			{name: "groq", apiKey: cfg.Groq.APIKey, apiBase: groqAPIBase, model: "gpt-oss-120b"},
+			{name: "groq", apiKey: cfg.Groq.APIKey, apiBase: groqAPIBase, model: "openai/gpt-oss-120b"},
 			{name: "cerebras", apiKey: cfg.cerebrasAPIKey(), apiBase: cerebrasAPIBase, model: "gpt-oss-120b"},
 			{name: "openrouter", apiKey: cfg.OpenRouter.APIKey, apiBase: openRouterAPIBase, model: "openai/gpt-oss-120b:free"},
 		})
@@ -198,7 +212,13 @@ func (c *LLMClient) chat(ctx context.Context, messages []ChatMessage, tools []To
 		return nil, fmt.Errorf("no configured LLM providers")
 	}
 	var lastErr error
+	attempted := false
 	for _, provider := range providers {
+		if disabled, reason := c.providerDisabled(provider); disabled {
+			slog.Info("Skipping disabled LLM provider", "provider", provider.name, "reason", reason)
+			continue
+		}
+		attempted = true
 		resp, err := c.chatWithProvider(ctx, provider, messages, tools, maxTokens, temperature, reasoningEffort)
 		if err == nil {
 			return resp, nil
@@ -207,9 +227,57 @@ func (c *LLMClient) chat(ctx context.Context, messages []ChatMessage, tools []To
 			return nil, err
 		}
 		lastErr = err
+		if shouldDisableProvider(err) {
+			c.disableProvider(provider, err.Error())
+			slog.Warn("LLM provider disabled due permanent error", "provider", provider.name, "err", err)
+			continue
+		}
 		slog.Warn("LLM provider failed, trying next provider", "provider", provider.name, "err", err)
 	}
+	if !attempted {
+		return nil, fmt.Errorf("no available LLM providers (all disabled)")
+	}
 	return nil, fmt.Errorf("all configured LLM providers failed: %w", lastErr)
+}
+
+func (c *LLMClient) providerDisabled(provider llmProvider) (bool, string) {
+	key := providerIdentity(provider)
+	c.disabledMu.RLock()
+	defer c.disabledMu.RUnlock()
+	if c.disabledProviders == nil {
+		return false, ""
+	}
+	reason, ok := c.disabledProviders[key]
+	return ok, reason
+}
+
+func (c *LLMClient) disableProvider(provider llmProvider, reason string) {
+	key := providerIdentity(provider)
+	c.disabledMu.Lock()
+	defer c.disabledMu.Unlock()
+	if c.disabledProviders == nil {
+		c.disabledProviders = make(map[string]string, len(c.providers))
+	}
+	c.disabledProviders[key] = reason
+}
+
+func providerIdentity(provider llmProvider) string {
+	return strings.TrimSpace(provider.name) + "|" + strings.TrimSpace(provider.apiBase) + "|" + strings.TrimSpace(provider.model)
+}
+
+func shouldDisableProvider(err error) bool {
+	var apiErr *llmAPIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return true
+	case http.StatusNotFound:
+		body := strings.ToLower(apiErr.Body)
+		return strings.Contains(body, "model_not_found") || strings.Contains(body, "does not exist")
+	}
+	return false
 }
 
 func (c *LLMClient) chatWithProvider(ctx context.Context, provider llmProvider, messages []ChatMessage, tools []ToolDef, maxTokens int, temperature float64, reasoningEffort string) (*LLMResponse, error) {
@@ -278,7 +346,7 @@ func (c *LLMClient) chatWithProvider(ctx context.Context, provider llmProvider, 
 			continue
 		}
 		if resp.StatusCode != 200 {
-			return nil, fmt.Errorf("LLM API error %d: %s", resp.StatusCode, string(respBody))
+			return nil, &llmAPIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 		}
 
 		var chatResp chatResponse

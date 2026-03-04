@@ -796,7 +796,7 @@ func TestRegisterDefaultTools(t *testing.T) {
 	cronSvc := newCronService(filepath.Join(dir, "cron.json"), nil)
 	llm := newLLMClient("k", "http://localhost", "m")
 	tools := newToolRegistry()
-	ctxB := newContextBuilder(dir, newMemoryStore(dir), newSkillsLoader(dir))
+	ctxB := newContextBuilder(dir, newMemoryStore(dir), newSkillsLoader(dir), "gpt-oss-120b")
 	subMgr := newSubagentManager(llm, dir, bus, tools, cfg, ctxB)
 
 	registerDefaultTools(tools, cfg, dir, bus, reqCtx, cronSvc, subMgr)
@@ -1068,7 +1068,7 @@ func TestSpawnTool(t *testing.T) {
 	llm := newLLMClient(cfg.APIKey, cfg.APIBase, cfg.Model)
 	bus := newMessageBus()
 	tools := newToolRegistry()
-	ctxB := newContextBuilder(dir, newMemoryStore(dir), newSkillsLoader(dir))
+	ctxB := newContextBuilder(dir, newMemoryStore(dir), newSkillsLoader(dir), "gpt-oss-120b")
 	subMgr := newSubagentManager(llm, dir, bus, tools, cfg, ctxB)
 	reqCtx := &RequestContext{ChatID: "chat1", SessionKey: "sess1"}
 
@@ -1103,7 +1103,7 @@ func TestSpawnToolWithLabel(t *testing.T) {
 	llm := newLLMClient(cfg.APIKey, cfg.APIBase, cfg.Model)
 	bus := newMessageBus()
 	tools := newToolRegistry()
-	ctxB := newContextBuilder(dir, newMemoryStore(dir), newSkillsLoader(dir))
+	ctxB := newContextBuilder(dir, newMemoryStore(dir), newSkillsLoader(dir), "gpt-oss-120b")
 	subMgr := newSubagentManager(llm, dir, bus, tools, cfg, ctxB)
 	reqCtx := &RequestContext{ChatID: "c", SessionKey: "s"}
 

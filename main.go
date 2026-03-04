@@ -179,7 +179,7 @@ Next steps:
      - cerebras.api_key: Cerebras API key
      - openrouter.api_key: OpenRouter API key
      - telegram.token: Your Telegram bot token (from @BotFather)
-     - telegram.allow_from: ["your_telegram_user_id"]
+     - telegram.allow_from: "your_telegram_username" (single username, no array)
      - model: gpt-oss-120b (default, uses automatic failover: groq -> cerebras -> openrouter)
 
   2. Run: cody

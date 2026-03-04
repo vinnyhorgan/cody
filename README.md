@@ -77,7 +77,7 @@ Edit `~/.cody/config.json`:
   "model": "gpt-oss-120b",
   "telegram": {
     "token": "123456:ABC-your-bot-token",
-    "allow_from": ["your_telegram_user_id"],
+    "allow_from": "your_telegram_username",
     "reply_to_message": false,
     "send_progress": true,
     "send_tool_hints": false
@@ -103,13 +103,14 @@ Cody checks these env vars when config fields are empty:
 - `CODY_API_BASE`, `OPENAI_API_BASE`
 - `CODY_MODEL`
 - `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_ALLOW_FROM`
 - `GROQ_API_KEY`
 - `OPENROUTER_API_KEY` (also `OPEN_ROUTER_API_KEY`)
 - `BRAVE_API_KEY`
 
-When `model` is `gpt-oss-120b`, Cody refuses to start unless all three provider keys are set: `groq.api_key`, `cerebras.api_key` (or legacy `api_key`), and `openrouter.api_key`.
+When `model` is `gpt-oss-120b`, Cody refuses to start unless all three provider keys are set: `groq.api_key`, `cerebras.api_key` (or legacy `api_key`), and `openrouter.api_key`. Cody also refuses to start unless `telegram.allow_from` is set to exactly one Telegram username.
 
-To get your Telegram user ID, message [@userinfobot](https://t.me/userinfobot).
+Set `telegram.allow_from` to your Telegram username (without `@`).
 
 ### 5. Run
 
@@ -254,31 +255,31 @@ make bootstrap-ci-tools
 
 ## Configuration Reference
 
-| Key                          | Type     | Default                      | Description                                                                               |
-| ---------------------------- | -------- | ---------------------------- | ----------------------------------------------------------------------------------------- |
-| `api_key`                    | string   | _(or env var)_               | Legacy Cerebras key alias (`CODY_API_KEY`, `CEREBRAS_API_KEY`, `OPENAI_API_KEY`)          |
-| `cerebras.api_key`           | string   | _(optional)_                 | Cerebras API key (required when `model` is `gpt-oss-120b`)                                |
-| `api_base`                   | string   | `https://api.cerebras.ai/v1` | OpenAI-compatible API base URL                                                            |
-| `model`                      | string   | `gpt-oss-120b`               | Model name used for chat completions                                                      |
-| `workspace`                  | string   | `~/.cody/workspace`          | Workspace root for memory, sessions, templates, and skills                                |
-| `telegram.token`             | string   | _(required)_                 | Telegram bot token                                                                        |
-| `telegram.allow_from`        | string[] | `[]`                         | Allowed Telegram sender IDs (empty means allow all)                                       |
-| `telegram.reply_to_message`  | bool     | `false`                      | Send responses as replies to the triggering message                                       |
-| `telegram.send_progress`     | bool     | `true`                       | Send progress updates during tool loops                                                   |
-| `telegram.send_tool_hints`   | bool     | `false`                      | Send tool-call hint messages during tool loops                                            |
-| `groq.api_key`               | string   | _(optional)_                 | Groq API key (required when `model` is `gpt-oss-120b`; also used for voice transcription) |
-| `openrouter.api_key`         | string   | _(optional)_                 | OpenRouter API key (required when `model` is `gpt-oss-120b`)                              |
-| `tools.web_search_api_key`   | string   | _(optional)_                 | Brave Search API key (or `BRAVE_API_KEY`)                                                 |
-| `tools.exec_timeout`         | int      | `60`                         | Max seconds for `exec` tool command                                                       |
-| `tools.allowed_dir`          | string   | `""`                         | Optional extra allowed directory for file/shell tools                                     |
-| `tools.path_append`          | string   | `""`                         | Optional PATH suffix for exec environment                                                 |
-| `heartbeat.enabled`          | bool     | `true`                       | Enable heartbeat scheduler                                                                |
-| `heartbeat.interval_minutes` | int      | `30`                         | Heartbeat run interval in minutes                                                         |
-| `agent.max_tokens`           | int      | `8192`                       | Max output tokens per model response                                                      |
-| `agent.temperature`          | float    | `0.1`                        | Sampling temperature                                                                      |
-| `agent.max_iterations`       | int      | `40`                         | Max tool-loop iterations per request                                                      |
-| `agent.memory_window`        | int      | `100`                        | Messages before memory consolidation                                                      |
-| `agent.reasoning_effort`     | string   | `""`                         | Optional reasoning effort hint for compatible models                                      |
+| Key                          | Type   | Default                      | Description                                                                               |
+| ---------------------------- | ------ | ---------------------------- | ----------------------------------------------------------------------------------------- |
+| `api_key`                    | string | _(or env var)_               | Legacy Cerebras key alias (`CODY_API_KEY`, `CEREBRAS_API_KEY`, `OPENAI_API_KEY`)          |
+| `cerebras.api_key`           | string | _(optional)_                 | Cerebras API key (required when `model` is `gpt-oss-120b`)                                |
+| `api_base`                   | string | `https://api.cerebras.ai/v1` | OpenAI-compatible API base URL                                                            |
+| `model`                      | string | `gpt-oss-120b`               | Model name used for chat completions                                                      |
+| `workspace`                  | string | `~/.cody/workspace`          | Workspace root for memory, sessions, templates, and skills                                |
+| `telegram.token`             | string | _(required)_                 | Telegram bot token                                                                        |
+| `telegram.allow_from`        | string | _(required)_                 | Single allowed Telegram username (without `@`)                                            |
+| `telegram.reply_to_message`  | bool   | `false`                      | Send responses as replies to the triggering message                                       |
+| `telegram.send_progress`     | bool   | `true`                       | Send progress updates during tool loops                                                   |
+| `telegram.send_tool_hints`   | bool   | `false`                      | Send tool-call hint messages during tool loops                                            |
+| `groq.api_key`               | string | _(optional)_                 | Groq API key (required when `model` is `gpt-oss-120b`; also used for voice transcription) |
+| `openrouter.api_key`         | string | _(optional)_                 | OpenRouter API key (required when `model` is `gpt-oss-120b`)                              |
+| `tools.web_search_api_key`   | string | _(optional)_                 | Brave Search API key (or `BRAVE_API_KEY`)                                                 |
+| `tools.exec_timeout`         | int    | `60`                         | Max seconds for `exec` tool command                                                       |
+| `tools.allowed_dir`          | string | `""`                         | Optional extra allowed directory for file/shell tools                                     |
+| `tools.path_append`          | string | `""`                         | Optional PATH suffix for exec environment                                                 |
+| `heartbeat.enabled`          | bool   | `true`                       | Enable heartbeat scheduler                                                                |
+| `heartbeat.interval_minutes` | int    | `30`                         | Heartbeat run interval in minutes                                                         |
+| `agent.max_tokens`           | int    | `8192`                       | Max output tokens per model response                                                      |
+| `agent.temperature`          | float  | `0.1`                        | Sampling temperature                                                                      |
+| `agent.max_iterations`       | int    | `40`                         | Max tool-loop iterations per request                                                      |
+| `agent.memory_window`        | int    | `100`                        | Messages before memory consolidation                                                      |
+| `agent.reasoning_effort`     | string | `""`                         | Optional reasoning effort hint for compatible models                                      |
 
 ## Project Layout
 

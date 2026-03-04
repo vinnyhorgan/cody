@@ -338,7 +338,7 @@ func TestContextBuilderSystemPrompt(t *testing.T) {
 	dir := t.TempDir()
 	ms := newMemoryStore(dir)
 	sl := newSkillsLoader(dir)
-	cb := newContextBuilder(dir, ms, sl)
+	cb := newContextBuilder(dir, ms, sl, "gpt-oss-120b")
 
 	prompt := cb.buildSystemPrompt()
 	if !strings.Contains(prompt, "Cody") {
@@ -353,7 +353,7 @@ func TestContextBuilderBuildMessages(t *testing.T) {
 	dir := t.TempDir()
 	ms := newMemoryStore(dir)
 	sl := newSkillsLoader(dir)
-	cb := newContextBuilder(dir, ms, sl)
+	cb := newContextBuilder(dir, ms, sl, "gpt-oss-120b")
 
 	history := []ChatMessage{
 		{Role: "user", Content: "previous msg"},
@@ -383,7 +383,7 @@ func TestContextBuilderTextOnlyInput(t *testing.T) {
 	dir := t.TempDir()
 	ms := newMemoryStore(dir)
 	sl := newSkillsLoader(dir)
-	cb := newContextBuilder(dir, ms, sl)
+	cb := newContextBuilder(dir, ms, sl, "gpt-oss-120b")
 
 	msgs := cb.buildMessages(nil, "check this image", "", "")
 
@@ -422,7 +422,7 @@ func TestContextBuilderIncludesRuntime(t *testing.T) {
 	tmp := t.TempDir()
 	mem := newMemoryStore(tmp)
 	skills := newSkillsLoader(tmp)
-	cb := newContextBuilder(tmp, mem, skills)
+	cb := newContextBuilder(tmp, mem, skills, "gpt-oss-120b")
 
 	prompt := cb.buildSystemPrompt()
 	if !strings.Contains(prompt, "Runtime") {
@@ -466,7 +466,7 @@ func newTestAgentLoop(t *testing.T, handler http.Handler) (*AgentLoop, *httptest
 
 	memory := newMemoryStore(dir)
 	skills := newSkillsLoader(dir)
-	ctxBuilder := newContextBuilder(dir, memory, skills)
+	ctxBuilder := newContextBuilder(dir, memory, skills, "gpt-oss-120b")
 
 	agent := &AgentLoop{
 		llm:      llm,
@@ -756,7 +756,7 @@ func newTestAgentLoopWithSubMgr(t *testing.T, handler http.Handler) (*AgentLoop,
 
 	memory := newMemoryStore(dir)
 	skills := newSkillsLoader(dir)
-	ctxBuilder := newContextBuilder(dir, memory, skills)
+	ctxBuilder := newContextBuilder(dir, memory, skills, "gpt-oss-120b")
 	reqCtx := &RequestContext{}
 	subMgr := newSubagentManager(llm, dir, bus, tools, cfg, ctxBuilder)
 

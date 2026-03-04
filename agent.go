@@ -504,10 +504,11 @@ type ContextBuilder struct {
 	workspace string
 	memory    *MemoryStore
 	skills    *SkillsLoader
+	model     string
 }
 
-func newContextBuilder(workspace string, memory *MemoryStore, skills *SkillsLoader) *ContextBuilder {
-	return &ContextBuilder{workspace: workspace, memory: memory, skills: skills}
+func newContextBuilder(workspace string, memory *MemoryStore, skills *SkillsLoader, model string) *ContextBuilder {
+	return &ContextBuilder{workspace: workspace, memory: memory, skills: skills, model: model}
 }
 
 func (cb *ContextBuilder) buildSystemPrompt() string {
@@ -530,6 +531,23 @@ func (cb *ContextBuilder) buildSystemPrompt() string {
 			return s
 		}(),
 		runtime.GOARCH, runtime.Version())
+	modelName := strings.TrimSpace(cb.model)
+	if modelName == "" {
+		modelName = "(unknown)"
+	}
+	modelIdentity := fmt.Sprintf(`## Model Identity
+- This Cody instance runs on: %s
+- If asked what model you are using, answer with this exact model family and do not claim GPT-4.`, modelName)
+	if isManagedGPTOSSModel(modelName) {
+		modelIdentity = `## Model Identity
+- This Cody instance runs on GPT OSS 120B.
+- If asked what model you are using, answer: "gpt-oss-120b".
+- Provider-specific IDs:
+  - Groq: openai/gpt-oss-120b
+  - Cerebras: gpt-oss-120b
+  - OpenRouter: openai/gpt-oss-120b:free
+- Never claim you are GPT-4 or ChatGPT-4.`
+	}
 
 	identity := fmt.Sprintf(`# Cody 🦔
 
@@ -544,6 +562,8 @@ Your workspace is at: %s
 - History log: %s/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
 - Custom skills: %s/skills/{skill-name}/SKILL.md
 
+%s
+
 ## Cody Guidelines
 - State intent before tool calls, but NEVER predict or claim results before receiving them.
 - Before modifying a file, read it first. Do not assume files or directories exist.
@@ -552,7 +572,7 @@ Your workspace is at: %s
 - Ask for clarification when the request is ambiguous.
 
 Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel.`,
-		goRuntime, workspacePath, workspacePath, workspacePath, workspacePath)
+		goRuntime, workspacePath, workspacePath, workspacePath, workspacePath, modelIdentity)
 	parts = append(parts, identity)
 
 	// Load templates from workspace (falling back to embedded)
@@ -824,7 +844,7 @@ func newAgentLoop(cfg *Config, llm *LLMClient, bus *MessageBus, sessions *Sessio
 	workspace := cfg.workspacePath()
 	memory := newMemoryStore(workspace)
 	skills := newSkillsLoader(workspace)
-	ctxBuilder := newContextBuilder(workspace, memory, skills)
+	ctxBuilder := newContextBuilder(workspace, memory, skills, cfg.Model)
 	reqCtx := &RequestContext{}
 
 	subMgr := newSubagentManager(llm, workspace, bus, tools, cfg, ctxBuilder)

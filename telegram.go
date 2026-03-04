@@ -96,22 +96,13 @@ func (tb *TelegramBot) stop() {
 	}
 }
 
-func (tb *TelegramBot) isAllowed(senderID string) bool {
-	if len(tb.config.Telegram.AllowFrom) == 0 {
-		return true
+func (tb *TelegramBot) isAllowed(username string) bool {
+	allowed := normalizeTelegramUsername(tb.config.Telegram.AllowFrom)
+	incoming := normalizeTelegramUsername(username)
+	if allowed == "" || incoming == "" {
+		return false
 	}
-	for _, allowed := range tb.config.Telegram.AllowFrom {
-		if allowed == senderID {
-			return true
-		}
-		// Also check individual parts (id|username format)
-		for _, part := range strings.Split(senderID, "|") {
-			if part != "" && part == allowed {
-				return true
-			}
-		}
-	}
-	return false
+	return incoming == allowed
 }
 
 func (tb *TelegramBot) handleMessage(msg *tgbotapi.Message) {
@@ -126,7 +117,15 @@ func (tb *TelegramBot) handleMessage(msg *tgbotapi.Message) {
 	}
 	chatID := fmt.Sprintf("%d", msg.Chat.ID)
 
-	// Match nanobot behavior: /start and /help are always accessible.
+	if !tb.isAllowed(msg.From.UserName) {
+		slog.Warn("Telegram: blocked message from unauthorized user",
+			"user_id", msg.From.ID,
+			"username", msg.From.UserName,
+			"allowed_username", tb.config.Telegram.AllowFrom)
+		return
+	}
+
+	// Keep basic UX commands available to the authorized user.
 	if msg.IsCommand() {
 		switch msg.Command() {
 		case "start":
@@ -143,11 +142,6 @@ func (tb *TelegramBot) handleMessage(msg *tgbotapi.Message) {
 			tb.sendText(chatID, "🦔 Cody commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands")
 			return
 		}
-	}
-
-	if !tb.isAllowed(senderID) {
-		slog.Warn("Telegram: blocked message from unauthorized user", "user", senderID)
-		return
 	}
 
 	var content string

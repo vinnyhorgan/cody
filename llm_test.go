@@ -400,14 +400,29 @@ func TestBuildLLMProvidersManagedOrder(t *testing.T) {
 	if providers[0].name != "groq" {
 		t.Fatalf("providers[0] = %q, want groq", providers[0].name)
 	}
+	if providers[0].model != "openai/gpt-oss-120b" {
+		t.Fatalf("groq model = %q, want %q", providers[0].model, "openai/gpt-oss-120b")
+	}
+	if providers[0].apiBase != "https://api.groq.com/openai/v1" {
+		t.Fatalf("groq apiBase = %q, want %q", providers[0].apiBase, "https://api.groq.com/openai/v1")
+	}
 	if providers[1].name != "cerebras" {
 		t.Fatalf("providers[1] = %q, want cerebras", providers[1].name)
+	}
+	if providers[1].model != "gpt-oss-120b" {
+		t.Fatalf("cerebras model = %q, want %q", providers[1].model, "gpt-oss-120b")
+	}
+	if providers[1].apiBase != "https://api.cerebras.ai/v1" {
+		t.Fatalf("cerebras apiBase = %q, want %q", providers[1].apiBase, "https://api.cerebras.ai/v1")
 	}
 	if providers[2].name != "openrouter" {
 		t.Fatalf("providers[2] = %q, want openrouter", providers[2].name)
 	}
 	if providers[2].model != "openai/gpt-oss-120b:free" {
 		t.Fatalf("openrouter model = %q, want %q", providers[2].model, "openai/gpt-oss-120b:free")
+	}
+	if providers[2].apiBase != "https://openrouter.ai/api/v1" {
+		t.Fatalf("openrouter apiBase = %q, want %q", providers[2].apiBase, "https://openrouter.ai/api/v1")
 	}
 }
 
@@ -495,6 +510,97 @@ func TestLLMClientChatAllProvidersFail(t *testing.T) {
 	}
 	if got := err.Error(); got == "" || !strings.Contains(got, "all configured LLM providers failed") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLLMClientDisablesProviderAfterModelNotFound(t *testing.T) {
+	var groqCalls atomic.Int32
+	groqSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		groqCalls.Add(1)
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error":{"message":"The model ` + "`gpt-oss-120b`" + ` does not exist or you do not have access to it.","type":"invalid_request_error","code":"model_not_found"}}`))
+	}))
+	defer groqSrv.Close()
+
+	var cerebrasCalls atomic.Int32
+	cerebrasSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cerebrasCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{
+				Message:      ChatMessage{Role: "assistant", Content: "ok"},
+				FinishReason: "stop",
+			}},
+		})
+	}))
+	defer cerebrasSrv.Close()
+
+	client := newLLMClient("unused", "http://unused", "ignored")
+	client.providers = []llmProvider{
+		{name: "groq", apiKey: "gsk-test", apiBase: groqSrv.URL, model: "gpt-oss-120b"},
+		{name: "cerebras", apiKey: "csk-test", apiBase: cerebrasSrv.URL, model: "gpt-oss-120b"},
+	}
+
+	// First call should hit Groq once, then fallback to Cerebras.
+	if _, err := client.chat(context.Background(), []ChatMessage{{Role: "user", Content: "hello"}}, nil, 256, 0.1, ""); err != nil {
+		t.Fatalf("first chat() error = %v", err)
+	}
+	if groqCalls.Load() != 1 {
+		t.Fatalf("groq calls after first request = %d, want 1", groqCalls.Load())
+	}
+	if cerebrasCalls.Load() != 1 {
+		t.Fatalf("cerebras calls after first request = %d, want 1", cerebrasCalls.Load())
+	}
+
+	// Second call should skip Groq entirely because it was disabled.
+	if _, err := client.chat(context.Background(), []ChatMessage{{Role: "user", Content: "again"}}, nil, 256, 0.1, ""); err != nil {
+		t.Fatalf("second chat() error = %v", err)
+	}
+	if groqCalls.Load() != 1 {
+		t.Fatalf("groq calls after second request = %d, want still 1", groqCalls.Load())
+	}
+	if cerebrasCalls.Load() != 2 {
+		t.Fatalf("cerebras calls after second request = %d, want 2", cerebrasCalls.Load())
+	}
+}
+
+func TestShouldDisableProvider(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "model not found",
+			err:  &llmAPIError{StatusCode: 404, Body: `{"error":{"code":"model_not_found"}}`},
+			want: true,
+		},
+		{
+			name: "unauthorized",
+			err:  &llmAPIError{StatusCode: 401, Body: `{"error":"bad key"}`},
+			want: true,
+		},
+		{
+			name: "forbidden",
+			err:  &llmAPIError{StatusCode: 403, Body: `{"error":"forbidden"}`},
+			want: true,
+		},
+		{
+			name: "rate limited",
+			err:  &llmAPIError{StatusCode: 429, Body: `{"error":"rate limit"}`},
+			want: false,
+		},
+		{
+			name: "non api error",
+			err:  context.DeadlineExceeded,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		if got := shouldDisableProvider(tt.err); got != tt.want {
+			t.Fatalf("%s: shouldDisableProvider() = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }
 

@@ -129,7 +129,7 @@ Location: `~/.cody/config.json`
   "workspace": "~/.cody/workspace",
   "telegram": {
     "token": "",
-    "allow_from": [],
+    "allow_from": "your_telegram_username",
     "reply_to_message": true,
     "send_progress": true,
     "send_tool_hints": false
@@ -146,7 +146,7 @@ Location: `~/.cody/config.json`
 }
 ```
 
-Required fields: `api_key` (or `cerebras.api_key`), `api_base`, `telegram.token`.
+Required fields: `telegram.token`, `telegram.allow_from`, plus provider keys for the selected model.
 
 ## Workspace Structure (runtime)
 

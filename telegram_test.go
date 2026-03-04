@@ -687,24 +687,24 @@ func TestMarkdownBulletListsInsideCodeBlock(t *testing.T) {
 
 func TestIsAllowedEmpty(t *testing.T) {
 	tb := &TelegramBot{config: &Config{}}
-	if !tb.isAllowed("anyone") {
-		t.Error("empty allow_from should allow all")
+	if tb.isAllowed("anyone") {
+		t.Error("empty allow_from should deny access")
 	}
 }
 
 func TestIsAllowedMatch(t *testing.T) {
 	cfg := &Config{}
-	cfg.Telegram.AllowFrom = []string{"123", "456"}
+	cfg.Telegram.AllowFrom = "alice_user"
 	tb := &TelegramBot{config: cfg}
 
-	if !tb.isAllowed("123") {
-		t.Error("should allow 123")
+	if !tb.isAllowed("alice_user") {
+		t.Error("should allow exact username")
 	}
-	if !tb.isAllowed("456") {
-		t.Error("should allow 456")
+	if !tb.isAllowed("@Alice_User") {
+		t.Error("should allow username with @ prefix and case differences")
 	}
-	if tb.isAllowed("789") {
-		t.Error("should reject 789")
+	if tb.isAllowed("other_user") {
+		t.Error("should reject different username")
 	}
 }
 
@@ -919,11 +919,12 @@ func TestHandleMessageTextOnly(t *testing.T) {
 
 	bus := newMessageBus()
 	cfg := &Config{}
+	cfg.Telegram.AllowFrom = "allowed_user"
 	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
-		From:      &tgbotapi.User{ID: 42},
+		From:      &tgbotapi.User{ID: 42, UserName: "allowed_user"},
 		Chat:      &tgbotapi.Chat{ID: 100},
 		Text:      "hello bot",
 		Date:      int(time.Now().Unix()),
@@ -938,7 +939,7 @@ func TestHandleMessageTextOnly(t *testing.T) {
 	if inbound.ChatID != "100" {
 		t.Errorf("chatID = %q", inbound.ChatID)
 	}
-	if inbound.SenderID != "42" {
+	if inbound.SenderID != "42|allowed_user" {
 		t.Errorf("senderID = %q", inbound.SenderID)
 	}
 }
@@ -948,13 +949,13 @@ func TestHandleMessageBlocked(t *testing.T) {
 	defer srv.Close()
 
 	cfg := &Config{}
-	cfg.Telegram.AllowFrom = []string{"999"}
+	cfg.Telegram.AllowFrom = "allowed_user"
 	bus := newMessageBus()
 	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
-		From:      &tgbotapi.User{ID: 42},
+		From:      &tgbotapi.User{ID: 42, UserName: "someone_else"},
 		Chat:      &tgbotapi.Chat{ID: 100},
 		Text:      "hello",
 		Date:      int(time.Now().Unix()),
@@ -976,11 +977,13 @@ func TestHandleMessageEmptyContent(t *testing.T) {
 	defer srv.Close()
 
 	bus := newMessageBus()
-	tb := &TelegramBot{config: &Config{}, bus: bus, bot: bot}
+	cfg := &Config{}
+	cfg.Telegram.AllowFrom = "allowed_user"
+	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
-		From:      &tgbotapi.User{ID: 1},
+		From:      &tgbotapi.User{ID: 1, UserName: "allowed_user"},
 		Chat:      &tgbotapi.Chat{ID: 1},
 		Date:      int(time.Now().Unix()),
 		// No text, no media - should be ignored
@@ -1001,7 +1004,9 @@ func TestHandleMessageMalformedMessage(t *testing.T) {
 	defer srv.Close()
 
 	bus := newMessageBus()
-	tb := &TelegramBot{config: &Config{}, bus: bus, bot: bot}
+	cfg := &Config{}
+	cfg.Telegram.AllowFrom = "allowed_user"
+	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	tb.handleMessage(nil)
 	tb.handleMessage(&tgbotapi.Message{Chat: &tgbotapi.Chat{ID: 1}, Text: "hi"})
@@ -1019,11 +1024,13 @@ func TestHandleMessageStartCommand(t *testing.T) {
 	defer srv.Close()
 
 	bus := newMessageBus()
-	tb := &TelegramBot{config: &Config{}, bus: bus, bot: bot}
+	cfg := &Config{}
+	cfg.Telegram.AllowFrom = "allowed_user"
+	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
-		From:      &tgbotapi.User{ID: 1},
+		From:      &tgbotapi.User{ID: 1, UserName: "allowed_user"},
 		Chat:      &tgbotapi.Chat{ID: 100},
 		Text:      "/start",
 		Date:      int(time.Now().Unix()),
@@ -1048,11 +1055,13 @@ func TestHandleMessageHelpCommand(t *testing.T) {
 	defer srv.Close()
 
 	bus := newMessageBus()
-	tb := &TelegramBot{config: &Config{}, bus: bus, bot: bot}
+	cfg := &Config{}
+	cfg.Telegram.AllowFrom = "allowed_user"
+	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
-		From:      &tgbotapi.User{ID: 1},
+		From:      &tgbotapi.User{ID: 1, UserName: "allowed_user"},
 		Chat:      &tgbotapi.Chat{ID: 100},
 		Text:      "/help",
 		Date:      int(time.Now().Unix()),
@@ -1071,18 +1080,18 @@ func TestHandleMessageHelpCommand(t *testing.T) {
 	}
 }
 
-func TestHandleMessageHelpBypassesACL(t *testing.T) {
+func TestHandleMessageHelpBlockedByACL(t *testing.T) {
 	srv, bot := mockTelegramServer(t)
 	defer srv.Close()
 
 	cfg := &Config{}
-	cfg.Telegram.AllowFrom = []string{"999"} // sender 1 is blocked for normal messages
+	cfg.Telegram.AllowFrom = "allowed_user"
 	bus := newMessageBus()
 	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
-		From:      &tgbotapi.User{ID: 1},
+		From:      &tgbotapi.User{ID: 1, UserName: "blocked_user"},
 		Chat:      &tgbotapi.Chat{ID: 100},
 		Text:      "/help",
 		Date:      int(time.Now().Unix()),
@@ -1093,7 +1102,7 @@ func TestHandleMessageHelpBypassesACL(t *testing.T) {
 
 	tb.handleMessage(msg)
 
-	// /help is handled directly and should not be forwarded to the agent bus.
+	// Unauthorized /help should be blocked and not forwarded to the agent bus.
 	select {
 	case <-bus.Inbound:
 		t.Error("/help should not send to bus")
@@ -1106,11 +1115,13 @@ func TestHandleMessageNewCommand(t *testing.T) {
 	defer srv.Close()
 
 	bus := newMessageBus()
-	tb := &TelegramBot{config: &Config{}, bus: bus, bot: bot}
+	cfg := &Config{}
+	cfg.Telegram.AllowFrom = "allowed_user"
+	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
-		From:      &tgbotapi.User{ID: 1},
+		From:      &tgbotapi.User{ID: 1, UserName: "allowed_user"},
 		Chat:      &tgbotapi.Chat{ID: 100},
 		Text:      "/new",
 		Date:      int(time.Now().Unix()),
@@ -1133,11 +1144,12 @@ func TestHandleMessageVoiceNoGroq(t *testing.T) {
 
 	bus := newMessageBus()
 	cfg := &Config{} // No Groq API key
+	cfg.Telegram.AllowFrom = "allowed_user"
 	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
-		From:      &tgbotapi.User{ID: 1},
+		From:      &tgbotapi.User{ID: 1, UserName: "allowed_user"},
 		Chat:      &tgbotapi.Chat{ID: 100},
 		Date:      int(time.Now().Unix()),
 		Voice:     &tgbotapi.Voice{FileID: "voice123"},
@@ -1157,11 +1169,12 @@ func TestHandleMessageAudioNoGroq(t *testing.T) {
 
 	bus := newMessageBus()
 	cfg := &Config{}
+	cfg.Telegram.AllowFrom = "allowed_user"
 	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
-		From:      &tgbotapi.User{ID: 1},
+		From:      &tgbotapi.User{ID: 1, UserName: "allowed_user"},
 		Chat:      &tgbotapi.Chat{ID: 100},
 		Date:      int(time.Now().Unix()),
 		Audio:     &tgbotapi.Audio{FileID: "audio123"},
@@ -1180,11 +1193,13 @@ func TestHandleMessagePhoto(t *testing.T) {
 	defer srv.Close()
 
 	bus := newMessageBus()
-	tb := &TelegramBot{config: &Config{}, bus: bus, bot: bot}
+	cfg := &Config{}
+	cfg.Telegram.AllowFrom = "allowed_user"
+	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
-		From:      &tgbotapi.User{ID: 1},
+		From:      &tgbotapi.User{ID: 1, UserName: "allowed_user"},
 		Chat:      &tgbotapi.Chat{ID: 100},
 		Date:      int(time.Now().Unix()),
 		Caption:   "Look at this",
@@ -1241,11 +1256,12 @@ func TestHandleMessageDocument(t *testing.T) {
 	bus := newMessageBus()
 	cfg := defaultConfig()
 	cfg.Workspace = t.TempDir()
+	cfg.Telegram.AllowFrom = "allowed_user"
 	tb := &TelegramBot{config: cfg, bus: bus, bot: bot}
 
 	msg := &tgbotapi.Message{
 		MessageID: 1,
-		From:      &tgbotapi.User{ID: 1},
+		From:      &tgbotapi.User{ID: 1, UserName: "allowed_user"},
 		Chat:      &tgbotapi.Chat{ID: 100},
 		Date:      int(time.Now().Unix()),
 		Document: &tgbotapi.Document{

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -23,11 +24,11 @@ type Config struct {
 }
 
 type TelegramConfig struct {
-	Token          string   `json:"token"`
-	AllowFrom      []string `json:"allow_from"`
-	ReplyToMessage bool     `json:"reply_to_message"`
-	SendProgress   bool     `json:"send_progress"`
-	SendToolHints  bool     `json:"send_tool_hints"`
+	Token          string `json:"token"`
+	AllowFrom      string `json:"allow_from"`
+	ReplyToMessage bool   `json:"reply_to_message"`
+	SendProgress   bool   `json:"send_progress"`
+	SendToolHints  bool   `json:"send_tool_hints"`
 }
 
 type ToolsConfig struct {
@@ -61,6 +62,8 @@ type CerebrasConfig struct {
 type OpenRouterConfig struct {
 	APIKey string `json:"api_key"`
 }
+
+var telegramUsernameRe = regexp.MustCompile(`^[A-Za-z0-9_]{5,32}$`)
 
 func defaultConfig() *Config {
 	return &Config{
@@ -136,6 +139,9 @@ func (c *Config) applyEnvFallbacks() {
 	if strings.TrimSpace(c.Telegram.Token) == "" {
 		c.Telegram.Token = firstNonEmptyEnv("TELEGRAM_BOT_TOKEN")
 	}
+	if strings.TrimSpace(c.Telegram.AllowFrom) == "" {
+		c.Telegram.AllowFrom = firstNonEmptyEnv("TELEGRAM_ALLOW_FROM")
+	}
 	if strings.TrimSpace(c.Groq.APIKey) == "" {
 		c.Groq.APIKey = firstNonEmptyEnv("GROQ_API_KEY")
 	}
@@ -172,9 +178,17 @@ func (c *Config) validate() error {
 	if !isManagedGPTOSSModel(c.Model) && strings.TrimSpace(c.APIBase) == "" {
 		return fmt.Errorf("api_base is required")
 	}
-	if c.Telegram.Token == "" {
+	if strings.TrimSpace(c.Telegram.Token) == "" {
 		return fmt.Errorf("telegram.token is required")
 	}
+	allowed := normalizeTelegramUsername(c.Telegram.AllowFrom)
+	if allowed == "" {
+		return fmt.Errorf("telegram.allow_from is required and must be a single Telegram username")
+	}
+	if !telegramUsernameRe.MatchString(allowed) {
+		return fmt.Errorf("telegram.allow_from must be a valid Telegram username (5-32 chars: letters, numbers, underscore)")
+	}
+	c.Telegram.AllowFrom = allowed
 	return nil
 }
 
@@ -233,4 +247,10 @@ func expandHome(path string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+func normalizeTelegramUsername(username string) string {
+	name := strings.TrimSpace(username)
+	name = strings.TrimPrefix(name, "@")
+	return strings.ToLower(strings.TrimSpace(name))
 }

@@ -60,6 +60,11 @@ func TestConfigValidation(t *testing.T) {
 	}
 
 	cfg.Telegram.Token = "bot-token"
+	if err := cfg.validate(); err == nil {
+		t.Error("expected validation error for missing telegram.allow_from")
+	}
+
+	cfg.Telegram.AllowFrom = "allowed_user"
 	if err := cfg.validate(); err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}
@@ -75,6 +80,7 @@ func TestConfigValidation(t *testing.T) {
 func TestConfigValidationManagedGPTOSSRequiresAllProviders(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Telegram.Token = "bot-token"
+	cfg.Telegram.AllowFrom = "allowed_user"
 	cfg.Cerebras.APIKey = "csk-test"
 	cfg.OpenRouter.APIKey = "sk-or-test"
 
@@ -94,7 +100,7 @@ func TestConfigJSONRoundTrip(t *testing.T) {
 	cfg.Cerebras.APIKey = "csk-test-456"
 	cfg.APIBase = "https://api.test.com/v1"
 	cfg.Telegram.Token = "12345:ABC"
-	cfg.Telegram.AllowFrom = []string{"user1", "user2"}
+	cfg.Telegram.AllowFrom = "user1"
 
 	data, err := json.Marshal(cfg)
 	if err != nil {
@@ -115,8 +121,8 @@ func TestConfigJSONRoundTrip(t *testing.T) {
 	if loaded.Telegram.Token != cfg.Telegram.Token {
 		t.Errorf("telegram.token = %q, want %q", loaded.Telegram.Token, cfg.Telegram.Token)
 	}
-	if len(loaded.Telegram.AllowFrom) != 2 {
-		t.Errorf("telegram.allow_from len = %d, want 2", len(loaded.Telegram.AllowFrom))
+	if loaded.Telegram.AllowFrom != "user1" {
+		t.Errorf("telegram.allow_from = %q, want %q", loaded.Telegram.AllowFrom, "user1")
 	}
 }
 

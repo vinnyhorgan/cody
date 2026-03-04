@@ -1079,7 +1079,7 @@ func TestLoadTemplateMissing(t *testing.T) {
 	workspace := t.TempDir()
 	ms := newMemoryStore(workspace)
 	sl := newSkillsLoader(workspace)
-	cb := newContextBuilder(workspace, ms, sl)
+	cb := newContextBuilder(workspace, ms, sl, "gpt-oss-120b")
 
 	result := cb.loadTemplate("NONEXISTENT.md")
 	if result != "" {
@@ -1173,34 +1173,34 @@ func TestChatWithToolChoice(t *testing.T) {
 
 func TestIsAllowedByUsername(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.Telegram.AllowFrom = []string{"johndoe"}
+	cfg.Telegram.AllowFrom = "johndoe"
 	tb := &TelegramBot{config: cfg}
 
-	if !tb.isAllowed("12345|johndoe") {
+	if !tb.isAllowed("johndoe") {
 		t.Error("expected allowed by username match")
 	}
-	if tb.isAllowed("12345|janedoe") {
+	if tb.isAllowed("janedoe") {
 		t.Error("expected denied for different username")
 	}
 }
 
-func TestIsAllowedByID(t *testing.T) {
+func TestIsAllowedCaseInsensitive(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.Telegram.AllowFrom = []string{"12345"}
+	cfg.Telegram.AllowFrom = "johndoe"
 	tb := &TelegramBot{config: cfg}
 
-	if !tb.isAllowed("12345|someuser") {
-		t.Error("expected allowed by ID match")
+	if !tb.isAllowed("@JohnDoe") {
+		t.Error("expected allowed by normalized username")
 	}
 }
 
-func TestIsAllowedEmptyList(t *testing.T) {
+func TestIsAllowedEmptyDenied(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.Telegram.AllowFrom = nil
+	cfg.Telegram.AllowFrom = ""
 	tb := &TelegramBot{config: cfg}
 
-	if !tb.isAllowed("anyone") {
-		t.Error("expected allowed when allow_from is empty")
+	if tb.isAllowed("anyone") {
+		t.Error("expected denied when allow_from is empty")
 	}
 }
 
@@ -1479,7 +1479,7 @@ func TestSubagentRunError(t *testing.T) {
 	cfg.Workspace = workspace
 	ms := newMemoryStore(workspace)
 	sl := newSkillsLoader(workspace)
-	ctxb := newContextBuilder(workspace, ms, sl)
+	ctxb := newContextBuilder(workspace, ms, sl, "gpt-oss-120b")
 	sm := newSubagentManager(llm, workspace, bus, tools, cfg, ctxb)
 
 	id := sm.spawn("test task", "test-label", "42", "test-session")
@@ -1528,7 +1528,7 @@ func TestBuildSystemPromptWithSkillsAndMemory(t *testing.T) {
 
 	ms := newMemoryStore(workspace)
 	sl := newSkillsLoader(workspace)
-	cb := newContextBuilder(workspace, ms, sl)
+	cb := newContextBuilder(workspace, ms, sl, "gpt-oss-120b")
 
 	prompt := cb.buildSystemPrompt()
 	if !strings.Contains(prompt, "User prefers dark mode") {
@@ -1623,7 +1623,7 @@ func TestSaveAndLoadConfigRoundTrip(t *testing.T) {
 	cfg.APIBase = "http://test.api"
 	cfg.Model = "test-model"
 	cfg.Telegram.Token = "test-token"
-	cfg.Telegram.AllowFrom = []string{"user1"}
+	cfg.Telegram.AllowFrom = "user1"
 
 	err := saveConfig(cfg)
 	if err != nil {
@@ -1753,7 +1753,7 @@ func TestSubagentSpawnAndResult(t *testing.T) {
 	cfg.Workspace = workspace
 	ms := newMemoryStore(workspace)
 	sl := newSkillsLoader(workspace)
-	ctxb := newContextBuilder(workspace, ms, sl)
+	ctxb := newContextBuilder(workspace, ms, sl, "gpt-oss-120b")
 	sm := newSubagentManager(llm, workspace, bus, tools, cfg, ctxb)
 
 	id := sm.spawn("test task", "test-label", "42", "test-session")
@@ -2001,7 +2001,7 @@ func TestSpawnSubagentMultiple(t *testing.T) {
 	cfg.Workspace = workspace
 	ms := newMemoryStore(workspace)
 	sl := newSkillsLoader(workspace)
-	ctxb := newContextBuilder(workspace, ms, sl)
+	ctxb := newContextBuilder(workspace, ms, sl, "gpt-oss-120b")
 	sm := newSubagentManager(llm, workspace, bus, tools, cfg, ctxb)
 
 	id1 := sm.spawn("task1", "label1", "42", "session1")
@@ -2231,7 +2231,7 @@ func TestLoadTemplateNotFound(t *testing.T) {
 	workspace := t.TempDir()
 	ms := newMemoryStore(workspace)
 	sl := newSkillsLoader(workspace)
-	cb := newContextBuilder(workspace, ms, sl)
+	cb := newContextBuilder(workspace, ms, sl, "gpt-oss-120b")
 
 	result := cb.loadTemplate("NONEXISTENT")
 	if result != "" {
