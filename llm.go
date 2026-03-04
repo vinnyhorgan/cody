@@ -10,8 +10,11 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -80,6 +83,66 @@ type LLMResponse struct {
 	FinishReason string
 }
 
+type ProviderRoutingProviderStats struct {
+	Attempts         int64  `json:"attempts"`
+	Successes        int64  `json:"successes"`
+	Failures         int64  `json:"failures"`
+	SkippedDisabled  int64  `json:"skipped_disabled"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+	LastUsedAt       string `json:"last_used_at,omitempty"`
+	LastRequestID    int64  `json:"last_request_id,omitempty"`
+	LastError        string `json:"last_error,omitempty"`
+}
+
+type ProviderRoutingLastRequest struct {
+	RequestID   int64  `json:"request_id"`
+	Status      string `json:"status"`
+	Provider    string `json:"provider,omitempty"`
+	CompletedAt string `json:"completed_at"`
+	Error       string `json:"error,omitempty"`
+}
+
+type ProviderRoutingStats struct {
+	Model                 string                                  `json:"model"`
+	FailoverOrder         []string                                `json:"failover_order"`
+	Since                 string                                  `json:"since"`
+	UpdatedAt             string                                  `json:"updated_at"`
+	RequestsTotal         int64                                   `json:"requests_total"`
+	RequestsSucceeded     int64                                   `json:"requests_succeeded"`
+	RequestsFailed        int64                                   `json:"requests_failed"`
+	ProviderAttemptsTotal int64                                   `json:"provider_attempts_total"`
+	Providers             map[string]ProviderRoutingProviderStats `json:"providers"`
+	LastRequestID         int64                                   `json:"last_request_id,omitempty"`
+	LastRequest           *ProviderRoutingLastRequest             `json:"last_request,omitempty"`
+	StatsFile             string                                  `json:"stats_file,omitempty"`
+	EventsFile            string                                  `json:"events_file,omitempty"`
+}
+
+type ProviderRoutingEvent struct {
+	Timestamp        string `json:"timestamp"`
+	RequestID        int64  `json:"request_id"`
+	Attempt          int    `json:"attempt"`
+	Provider         string `json:"provider"`
+	APIBase          string `json:"api_base"`
+	ProviderModel    string `json:"provider_model"`
+	RequestModel     string `json:"request_model"`
+	Outcome          string `json:"outcome"`
+	HTTPStatus       int    `json:"http_status,omitempty"`
+	DurationMS       int64  `json:"duration_ms,omitempty"`
+	FinishReason     string `json:"finish_reason,omitempty"`
+	PromptTokens     int    `json:"prompt_tokens,omitempty"`
+	CompletionTokens int    `json:"completion_tokens,omitempty"`
+	TotalTokens      int    `json:"total_tokens,omitempty"`
+	Error            string `json:"error,omitempty"`
+}
+
+type ProviderRoutingReport struct {
+	Summary      ProviderRoutingStats   `json:"summary"`
+	RecentEvents []ProviderRoutingEvent `json:"recent_events"`
+}
+
 // LLMClient calls an OpenAI-compatible chat completions endpoint.
 type LLMClient struct {
 	apiKey  string
@@ -92,14 +155,28 @@ type LLMClient struct {
 	// after a permanent API error (for example model_not_found).
 	disabledMu        sync.RWMutex
 	disabledProviders map[string]string
+
+	statsMu      sync.RWMutex
+	stats        ProviderRoutingStats
+	recentEvents []ProviderRoutingEvent
+	statsPath    string
+	eventsPath   string
+	requestSeq   atomic.Int64
 }
 
 func newLLMClient(apiKey, apiBase, model string) *LLMClient {
+	now := time.Now().UTC().Format(time.RFC3339)
 	return &LLMClient{
 		apiKey:  apiKey,
 		apiBase: apiBase,
 		model:   model,
 		client:  &http.Client{Timeout: 5 * time.Minute},
+		stats: ProviderRoutingStats{
+			Model:     strings.TrimSpace(model),
+			Since:     now,
+			UpdatedAt: now,
+			Providers: make(map[string]ProviderRoutingProviderStats),
+		},
 	}
 }
 
@@ -109,6 +186,9 @@ func newLLMClientFromConfig(cfg *Config) *LLMClient {
 	}
 	client := newLLMClient(cfg.cerebrasAPIKey(), cfg.APIBase, cfg.Model)
 	client.providers = buildLLMProviders(cfg)
+	client.configureProviderRoutingStats(cfg.workspacePath())
+	client.setFailoverOrder(client.providerChain())
+	client.persistProviderStats(nil)
 	return client
 }
 
@@ -132,6 +212,14 @@ const (
 	cerebrasAPIBase   = "https://api.cerebras.ai/v1"
 	groqAPIBase       = "https://api.groq.com/openai/v1"
 	openRouterAPIBase = "https://openrouter.ai/api/v1"
+
+	providerRoutingStatsFilename  = "provider-routing-stats.json"
+	providerRoutingEventsFilename = "provider-routing-events.jsonl"
+	maxRecentRoutingEvents        = 200
+
+	providerEventSuccess         = "success"
+	providerEventError           = "error"
+	providerEventSkippedDisabled = "skipped_disabled"
 )
 
 func buildLLMProviders(cfg *Config) []llmProvider {
@@ -206,24 +294,299 @@ func (c *LLMClient) requestModelFor(provider llmProvider) string {
 	return model
 }
 
+func (c *LLMClient) configureProviderRoutingStats(workspace string) {
+	ws := strings.TrimSpace(workspace)
+	if ws == "" {
+		return
+	}
+	memoryDir := filepath.Join(ws, "memory")
+	statsPath := filepath.Join(memoryDir, providerRoutingStatsFilename)
+	eventsPath := filepath.Join(memoryDir, providerRoutingEventsFilename)
+
+	c.statsMu.Lock()
+	c.statsPath = statsPath
+	c.eventsPath = eventsPath
+	c.stats.StatsFile = statsPath
+	c.stats.EventsFile = eventsPath
+	c.statsMu.Unlock()
+}
+
+func providerName(provider llmProvider) string {
+	name := strings.TrimSpace(provider.name)
+	if name == "" {
+		return "default"
+	}
+	return name
+}
+
+func (c *LLMClient) setFailoverOrder(providers []llmProvider) {
+	order := make([]string, 0, len(providers))
+	seen := make(map[string]struct{}, len(providers))
+	for _, provider := range providers {
+		name := providerName(provider)
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		order = append(order, name)
+	}
+
+	c.statsMu.Lock()
+	defer c.statsMu.Unlock()
+	c.ensureStatsMapsLocked()
+	c.stats.FailoverOrder = order
+	for _, name := range order {
+		if _, ok := c.stats.Providers[name]; !ok {
+			c.stats.Providers[name] = ProviderRoutingProviderStats{}
+		}
+	}
+}
+
+func (c *LLMClient) ensureStatsMapsLocked() {
+	if c.stats.Providers == nil {
+		c.stats.Providers = make(map[string]ProviderRoutingProviderStats)
+	}
+	if c.stats.Since == "" {
+		c.stats.Since = time.Now().UTC().Format(time.RFC3339)
+	}
+	if c.stats.UpdatedAt == "" {
+		c.stats.UpdatedAt = c.stats.Since
+	}
+	if c.stats.Model == "" {
+		c.stats.Model = strings.TrimSpace(c.model)
+	}
+}
+
+func (c *LLMClient) recordRequestStart(requestID int64, providers []llmProvider) {
+	c.setFailoverOrder(providers)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	c.statsMu.Lock()
+	c.ensureStatsMapsLocked()
+	c.stats.RequestsTotal++
+	c.stats.LastRequestID = requestID
+	c.stats.UpdatedAt = now
+	c.statsMu.Unlock()
+
+	c.persistProviderStats(nil)
+}
+
+func (c *LLMClient) recordRequestCompletion(requestID int64, success bool, provider string, errMsg string) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	c.statsMu.Lock()
+	c.ensureStatsMapsLocked()
+	if success {
+		c.stats.RequestsSucceeded++
+	} else {
+		c.stats.RequestsFailed++
+	}
+	c.stats.LastRequest = &ProviderRoutingLastRequest{
+		RequestID:   requestID,
+		CompletedAt: now,
+	}
+	if success {
+		c.stats.LastRequest.Status = providerEventSuccess
+		c.stats.LastRequest.Provider = provider
+	} else {
+		c.stats.LastRequest.Status = "failed"
+		c.stats.LastRequest.Error = errMsg
+	}
+	c.stats.UpdatedAt = now
+	c.statsMu.Unlock()
+
+	c.persistProviderStats(nil)
+}
+
+func providerHTTPStatus(err error) int {
+	var apiErr *llmAPIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode
+	}
+	return 0
+}
+
+func (c *LLMClient) recordProviderEvent(event ProviderRoutingEvent) {
+	event.Timestamp = strings.TrimSpace(event.Timestamp)
+	if event.Timestamp == "" {
+		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	event.Provider = providerName(llmProvider{name: event.Provider})
+
+	c.statsMu.Lock()
+	c.ensureStatsMapsLocked()
+	pstats := c.stats.Providers[event.Provider]
+	switch event.Outcome {
+	case providerEventSuccess:
+		c.stats.ProviderAttemptsTotal++
+		pstats.Attempts++
+		pstats.Successes++
+		pstats.PromptTokens += int64(event.PromptTokens)
+		pstats.CompletionTokens += int64(event.CompletionTokens)
+		pstats.TotalTokens += int64(event.TotalTokens)
+		pstats.LastUsedAt = event.Timestamp
+		pstats.LastRequestID = event.RequestID
+		pstats.LastError = ""
+	case providerEventError:
+		c.stats.ProviderAttemptsTotal++
+		pstats.Attempts++
+		pstats.Failures++
+		pstats.LastUsedAt = event.Timestamp
+		pstats.LastRequestID = event.RequestID
+		pstats.LastError = event.Error
+	case providerEventSkippedDisabled:
+		pstats.SkippedDisabled++
+	}
+	c.stats.Providers[event.Provider] = pstats
+
+	c.recentEvents = append(c.recentEvents, event)
+	if len(c.recentEvents) > maxRecentRoutingEvents {
+		c.recentEvents = append([]ProviderRoutingEvent(nil), c.recentEvents[len(c.recentEvents)-maxRecentRoutingEvents:]...)
+	}
+	c.stats.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	c.statsMu.Unlock()
+
+	c.persistProviderStats(&event)
+}
+
+func cloneProviderStats(in map[string]ProviderRoutingProviderStats) map[string]ProviderRoutingProviderStats {
+	if len(in) == 0 {
+		return map[string]ProviderRoutingProviderStats{}
+	}
+	out := make(map[string]ProviderRoutingProviderStats, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func (c *LLMClient) providerRoutingReport(limit int) ProviderRoutingReport {
+	c.statsMu.RLock()
+	defer c.statsMu.RUnlock()
+
+	summary := c.stats
+	summary.FailoverOrder = append([]string(nil), c.stats.FailoverOrder...)
+	summary.Providers = cloneProviderStats(c.stats.Providers)
+	if c.stats.LastRequest != nil {
+		last := *c.stats.LastRequest
+		summary.LastRequest = &last
+	}
+
+	events := append([]ProviderRoutingEvent(nil), c.recentEvents...)
+	if limit > 0 && len(events) > limit {
+		events = events[len(events)-limit:]
+	}
+
+	return ProviderRoutingReport{
+		Summary:      summary,
+		RecentEvents: events,
+	}
+}
+
+func (c *LLMClient) persistProviderStats(event *ProviderRoutingEvent) {
+	c.statsMu.RLock()
+	statsPath := c.statsPath
+	eventsPath := c.eventsPath
+	c.statsMu.RUnlock()
+
+	if statsPath == "" && (event == nil || eventsPath == "") {
+		return
+	}
+	if statsPath != "" {
+		if err := ensureDir(filepath.Dir(statsPath)); err != nil {
+			slog.Warn("Failed to create provider stats directory", "err", err)
+		} else {
+			report := c.providerRoutingReport(0)
+			data, err := json.MarshalIndent(report.Summary, "", "  ")
+			if err != nil {
+				slog.Warn("Failed to marshal provider stats", "err", err)
+			} else if err := os.WriteFile(statsPath, append(data, '\n'), 0644); err != nil {
+				slog.Warn("Failed to persist provider stats", "path", statsPath, "err", err)
+			}
+		}
+	}
+	if event != nil && eventsPath != "" {
+		if err := ensureDir(filepath.Dir(eventsPath)); err != nil {
+			slog.Warn("Failed to create provider event log directory", "err", err)
+			return
+		}
+		f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			slog.Warn("Failed to open provider event log", "path", eventsPath, "err", err)
+			return
+		}
+		enc := json.NewEncoder(f)
+		if err := enc.Encode(event); err != nil {
+			slog.Warn("Failed to append provider event", "path", eventsPath, "err", err)
+		}
+		if err := f.Close(); err != nil {
+			slog.Warn("Failed to close provider event log", "path", eventsPath, "err", err)
+		}
+	}
+}
+
 func (c *LLMClient) chat(ctx context.Context, messages []ChatMessage, tools []ToolDef, maxTokens int, temperature float64, reasoningEffort string) (*LLMResponse, error) {
 	providers := c.providerChain()
+	requestID := c.requestSeq.Add(1)
+	c.recordRequestStart(requestID, providers)
+
 	if len(providers) == 0 {
-		return nil, fmt.Errorf("no configured LLM providers")
+		err := fmt.Errorf("no configured LLM providers")
+		c.recordRequestCompletion(requestID, false, "", err.Error())
+		return nil, err
 	}
 	var lastErr error
 	attempted := false
-	for _, provider := range providers {
+	for idx, provider := range providers {
+		attemptNum := idx + 1
 		if disabled, reason := c.providerDisabled(provider); disabled {
 			slog.Info("Skipping disabled LLM provider", "provider", provider.name, "reason", reason)
+			c.recordProviderEvent(ProviderRoutingEvent{
+				RequestID:     requestID,
+				Attempt:       attemptNum,
+				Provider:      provider.name,
+				APIBase:       provider.apiBase,
+				ProviderModel: provider.model,
+				RequestModel:  c.requestModelFor(provider),
+				Outcome:       providerEventSkippedDisabled,
+				Error:         reason,
+			})
 			continue
 		}
 		attempted = true
+		started := time.Now()
 		resp, err := c.chatWithProvider(ctx, provider, messages, tools, maxTokens, temperature, reasoningEffort)
 		if err == nil {
+			c.recordProviderEvent(ProviderRoutingEvent{
+				RequestID:        requestID,
+				Attempt:          attemptNum,
+				Provider:         provider.name,
+				APIBase:          provider.apiBase,
+				ProviderModel:    provider.model,
+				RequestModel:     c.requestModelFor(provider),
+				Outcome:          providerEventSuccess,
+				DurationMS:       time.Since(started).Milliseconds(),
+				FinishReason:     resp.FinishReason,
+				PromptTokens:     resp.Usage.PromptTokens,
+				CompletionTokens: resp.Usage.CompletionTokens,
+				TotalTokens:      resp.Usage.TotalTokens,
+			})
+			c.recordRequestCompletion(requestID, true, providerName(provider), "")
 			return resp, nil
 		}
+		c.recordProviderEvent(ProviderRoutingEvent{
+			RequestID:     requestID,
+			Attempt:       attemptNum,
+			Provider:      provider.name,
+			APIBase:       provider.apiBase,
+			ProviderModel: provider.model,
+			RequestModel:  c.requestModelFor(provider),
+			Outcome:       providerEventError,
+			HTTPStatus:    providerHTTPStatus(err),
+			DurationMS:    time.Since(started).Milliseconds(),
+			Error:         err.Error(),
+		})
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			c.recordRequestCompletion(requestID, false, "", err.Error())
 			return nil, err
 		}
 		lastErr = err
@@ -235,9 +598,13 @@ func (c *LLMClient) chat(ctx context.Context, messages []ChatMessage, tools []To
 		slog.Warn("LLM provider failed, trying next provider", "provider", provider.name, "err", err)
 	}
 	if !attempted {
-		return nil, fmt.Errorf("no available LLM providers (all disabled)")
+		err := fmt.Errorf("no available LLM providers (all disabled)")
+		c.recordRequestCompletion(requestID, false, "", err.Error())
+		return nil, err
 	}
-	return nil, fmt.Errorf("all configured LLM providers failed: %w", lastErr)
+	err := fmt.Errorf("all configured LLM providers failed: %w", lastErr)
+	c.recordRequestCompletion(requestID, false, "", err.Error())
+	return nil, err
 }
 
 func (c *LLMClient) providerDisabled(provider llmProvider) (bool, string) {

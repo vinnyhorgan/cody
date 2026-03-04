@@ -505,10 +505,15 @@ type ContextBuilder struct {
 	memory    *MemoryStore
 	skills    *SkillsLoader
 	model     string
+	llm       *LLMClient
 }
 
 func newContextBuilder(workspace string, memory *MemoryStore, skills *SkillsLoader, model string) *ContextBuilder {
 	return &ContextBuilder{workspace: workspace, memory: memory, skills: skills, model: model}
+}
+
+func (cb *ContextBuilder) setLLMClient(llm *LLMClient) {
+	cb.llm = llm
 }
 
 func (cb *ContextBuilder) buildSystemPrompt() string {
@@ -539,14 +544,29 @@ func (cb *ContextBuilder) buildSystemPrompt() string {
 - This Cody instance runs on: %s
 - If asked what model you are using, answer with this exact model family and do not claim GPT-4.`, modelName)
 	if isManagedGPTOSSModel(modelName) {
+		statsPath := filepath.Join(workspacePath, "memory", providerRoutingStatsFilename)
+		eventsPath := filepath.Join(workspacePath, "memory", providerRoutingEventsFilename)
 		modelIdentity = `## Model Identity
 - This Cody instance runs on GPT OSS 120B.
 - If asked what model you are using, answer: "gpt-oss-120b".
+- Requests are served by one of these providers: Groq, Cerebras, OpenRouter (failover order).
 - Provider-specific IDs:
   - Groq: openai/gpt-oss-120b
   - Cerebras: gpt-oss-120b
   - OpenRouter: openai/gpt-oss-120b:free
+- Provider routing stats snapshot: ` + statsPath + `
+- Provider routing events log (JSONL): ` + eventsPath + `
+- Use the provider_stats tool for live routing counters and recent events.
 - Never claim you are GPT-4 or ChatGPT-4.`
+		if cb.llm != nil {
+			report := cb.llm.providerRoutingReport(0)
+			modelIdentity += fmt.Sprintf(`
+- Live routing totals: requests=%d (success=%d, failed=%d), provider_attempts=%d.`,
+				report.Summary.RequestsTotal,
+				report.Summary.RequestsSucceeded,
+				report.Summary.RequestsFailed,
+				report.Summary.ProviderAttemptsTotal)
+		}
 	}
 
 	identity := fmt.Sprintf(`# Cody 🦔
@@ -845,11 +865,12 @@ func newAgentLoop(cfg *Config, llm *LLMClient, bus *MessageBus, sessions *Sessio
 	memory := newMemoryStore(workspace)
 	skills := newSkillsLoader(workspace)
 	ctxBuilder := newContextBuilder(workspace, memory, skills, cfg.Model)
+	ctxBuilder.setLLMClient(llm)
 	reqCtx := &RequestContext{}
 
 	subMgr := newSubagentManager(llm, workspace, bus, tools, cfg, ctxBuilder)
 
-	registerDefaultTools(tools, cfg, workspace, bus, reqCtx, cronSvc, subMgr)
+	registerDefaultTools(tools, cfg, workspace, bus, reqCtx, cronSvc, subMgr, llm)
 
 	return &AgentLoop{
 		llm:      llm,

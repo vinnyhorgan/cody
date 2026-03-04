@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -561,6 +563,89 @@ func TestLLMClientDisablesProviderAfterModelNotFound(t *testing.T) {
 	}
 	if cerebrasCalls.Load() != 2 {
 		t.Fatalf("cerebras calls after second request = %d, want 2", cerebrasCalls.Load())
+	}
+}
+
+func TestLLMClientProviderRoutingStatsPersistence(t *testing.T) {
+	var groqCalls atomic.Int32
+	groqSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		groqCalls.Add(1)
+		w.WriteHeader(429)
+		w.Write([]byte(`{"error":"rate limit"}`))
+	}))
+	defer groqSrv.Close()
+
+	var cerebrasCalls atomic.Int32
+	cerebrasSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cerebrasCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{
+				Message:      ChatMessage{Role: "assistant", Content: "ok"},
+				FinishReason: "stop",
+			}},
+			Usage: LLMUsage{PromptTokens: 20, CompletionTokens: 4, TotalTokens: 24},
+		})
+	}))
+	defer cerebrasSrv.Close()
+
+	tmp := t.TempDir()
+	client := newLLMClient("unused", "http://unused", "gpt-oss-120b")
+	client.providers = []llmProvider{
+		{name: "groq", apiKey: "gsk-test", apiBase: groqSrv.URL, model: "openai/gpt-oss-120b"},
+		{name: "cerebras", apiKey: "csk-test", apiBase: cerebrasSrv.URL, model: "gpt-oss-120b"},
+	}
+	client.configureProviderRoutingStats(tmp)
+
+	if _, err := client.chat(context.Background(), []ChatMessage{{Role: "user", Content: "hello"}}, nil, 256, 0.1, ""); err != nil {
+		t.Fatalf("chat() error = %v", err)
+	}
+
+	report := client.providerRoutingReport(10)
+	if report.Summary.RequestsTotal != 1 {
+		t.Fatalf("requests_total = %d, want 1", report.Summary.RequestsTotal)
+	}
+	if report.Summary.RequestsSucceeded != 1 {
+		t.Fatalf("requests_succeeded = %d, want 1", report.Summary.RequestsSucceeded)
+	}
+	if report.Summary.ProviderAttemptsTotal != 2 {
+		t.Fatalf("provider_attempts_total = %d, want 2", report.Summary.ProviderAttemptsTotal)
+	}
+	if report.Summary.Providers["groq"].Failures != 1 {
+		t.Fatalf("groq failures = %d, want 1", report.Summary.Providers["groq"].Failures)
+	}
+	if report.Summary.Providers["cerebras"].Successes != 1 {
+		t.Fatalf("cerebras successes = %d, want 1", report.Summary.Providers["cerebras"].Successes)
+	}
+	if len(report.RecentEvents) != 2 {
+		t.Fatalf("recent events = %d, want 2", len(report.RecentEvents))
+	}
+
+	statsPath := filepath.Join(tmp, "memory", providerRoutingStatsFilename)
+	eventsPath := filepath.Join(tmp, "memory", providerRoutingEventsFilename)
+
+	statsData, err := os.ReadFile(statsPath)
+	if err != nil {
+		t.Fatalf("read stats file: %v", err)
+	}
+	var summary ProviderRoutingStats
+	if err := json.Unmarshal(statsData, &summary); err != nil {
+		t.Fatalf("parse stats file: %v", err)
+	}
+	if summary.RequestsTotal != 1 {
+		t.Fatalf("persisted requests_total = %d, want 1", summary.RequestsTotal)
+	}
+
+	eventData, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("read events file: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(eventData)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("event line count = %d, want 2", len(lines))
+	}
+	if groqCalls.Load() != 1 || cerebrasCalls.Load() != 1 {
+		t.Fatalf("provider calls groq=%d cerebras=%d, want 1/1", groqCalls.Load(), cerebrasCalls.Load())
 	}
 }
 

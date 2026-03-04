@@ -433,6 +433,28 @@ func TestContextBuilderIncludesRuntime(t *testing.T) {
 	}
 }
 
+func TestContextBuilderManagedModelIncludesProviderAwareness(t *testing.T) {
+	tmp := t.TempDir()
+	mem := newMemoryStore(tmp)
+	skills := newSkillsLoader(tmp)
+	cb := newContextBuilder(tmp, mem, skills, "gpt-oss-120b")
+
+	llm := newLLMClient("k", "http://localhost", "gpt-oss-120b")
+	llm.configureProviderRoutingStats(tmp)
+	cb.setLLMClient(llm)
+
+	prompt := cb.buildSystemPrompt()
+	if !strings.Contains(prompt, "provider_stats tool") {
+		t.Fatal("system prompt should mention provider_stats tool")
+	}
+	if !strings.Contains(prompt, filepath.Join(tmp, "memory", providerRoutingStatsFilename)) {
+		t.Fatal("system prompt should include provider stats file path")
+	}
+	if !strings.Contains(prompt, filepath.Join(tmp, "memory", providerRoutingEventsFilename)) {
+		t.Fatal("system prompt should include provider events file path")
+	}
+}
+
 // newTestAgentLoop creates an AgentLoop connected to a mock LLM server for testing.
 func newTestAgentLoop(t *testing.T, handler http.Handler) (*AgentLoop, *httptest.Server) {
 	t.Helper()

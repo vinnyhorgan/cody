@@ -380,7 +380,7 @@ func resolvePath(workspace, path, allowedDir string) (string, error) {
 // --- Built-in tools ---
 
 func registerDefaultTools(reg *ToolRegistry, cfg *Config, workspace string, bus *MessageBus, reqCtx *RequestContext,
-	cronSvc *CronService, subMgr *SubagentManager) {
+	cronSvc *CronService, subMgr *SubagentManager, llm *LLMClient) {
 
 	allowedDir := cfg.Tools.AllowedDir
 
@@ -394,6 +394,7 @@ func registerDefaultTools(reg *ToolRegistry, cfg *Config, workspace string, bus 
 	reg.register(makeMessageTool(bus, reqCtx))
 	reg.register(makeCronTool(cronSvc, reqCtx))
 	reg.register(makeSpawnTool(subMgr, reqCtx))
+	reg.register(makeProviderStatsTool(llm))
 }
 
 // --- read_file ---
@@ -1127,6 +1128,44 @@ func makeSpawnTool(subMgr *SubagentManager, reqCtx *RequestContext) *AgentTool {
 			slog.Info("Spawning subagent", "label", label)
 			id := subMgr.spawn(task, label, reqCtx.ChatID, reqCtx.SessionKey)
 			return fmt.Sprintf("Subagent [%s] started (id: %s). I'll notify you when it completes.", label, id), nil
+		},
+	}
+}
+
+// --- provider_stats ---
+
+func makeProviderStatsTool(llm *LLMClient) *AgentTool {
+	return &AgentTool{
+		name:        "provider_stats",
+		description: "Show LLM provider routing stats and recent routing events as JSON.",
+		parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"recent_events": map[string]any{
+					"type":        "integer",
+					"description": "Number of recent routing events to include (default 25, max 500).",
+					"minimum":     0,
+					"maximum":     500,
+				},
+			},
+		},
+		execute: func(ctx context.Context, params map[string]any) (string, error) {
+			if llm == nil {
+				return "", fmt.Errorf("LLM client is not available")
+			}
+			limit := paramInt(params, "recent_events")
+			if limit <= 0 {
+				limit = 25
+			}
+			if limit > 500 {
+				limit = 500
+			}
+			report := llm.providerRoutingReport(limit)
+			data, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("marshal provider stats: %w", err)
+			}
+			return string(data), nil
 		},
 	}
 }

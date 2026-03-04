@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -799,21 +800,68 @@ func TestRegisterDefaultTools(t *testing.T) {
 	ctxB := newContextBuilder(dir, newMemoryStore(dir), newSkillsLoader(dir), "gpt-oss-120b")
 	subMgr := newSubagentManager(llm, dir, bus, tools, cfg, ctxB)
 
-	registerDefaultTools(tools, cfg, dir, bus, reqCtx, cronSvc, subMgr)
+	registerDefaultTools(tools, cfg, dir, bus, reqCtx, cronSvc, subMgr, llm)
 
 	schemas := tools.schemas()
-	if len(schemas) < 9 {
-		t.Errorf("expected at least 9 tools, got %d", len(schemas))
+	if len(schemas) < 11 {
+		t.Errorf("expected at least 11 tools, got %d", len(schemas))
 	}
 
 	names := make(map[string]bool)
 	for _, s := range schemas {
 		names[s.Function.Name] = true
 	}
-	for _, n := range []string{"read_file", "write_file", "edit_file", "list_dir", "exec", "web_search", "web_fetch", "message", "cron", "spawn"} {
+	for _, n := range []string{"read_file", "write_file", "edit_file", "list_dir", "exec", "web_search", "web_fetch", "message", "cron", "spawn", "provider_stats"} {
 		if !names[n] {
 			t.Errorf("missing tool: %s", n)
 		}
+	}
+}
+
+func TestProviderStatsTool(t *testing.T) {
+	dir := t.TempDir()
+	llm := newLLMClient("k", "http://localhost", "gpt-oss-120b")
+	llm.configureProviderRoutingStats(dir)
+
+	providers := []llmProvider{
+		{name: "groq", apiKey: "gsk-test", apiBase: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-120b"},
+	}
+	llm.recordRequestStart(1, providers)
+	llm.recordProviderEvent(ProviderRoutingEvent{
+		RequestID:        1,
+		Attempt:          1,
+		Provider:         "groq",
+		APIBase:          "https://api.groq.com/openai/v1",
+		ProviderModel:    "openai/gpt-oss-120b",
+		RequestModel:     "openai/gpt-oss-120b",
+		Outcome:          providerEventSuccess,
+		PromptTokens:     10,
+		CompletionTokens: 5,
+		TotalTokens:      15,
+	})
+	llm.recordRequestCompletion(1, true, "groq", "")
+
+	tool := makeProviderStatsTool(llm)
+	out, err := tool.execute(context.Background(), map[string]any{"recent_events": 5})
+	if err != nil {
+		t.Fatalf("provider_stats tool error = %v", err)
+	}
+
+	var report ProviderRoutingReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("unmarshal tool output: %v", err)
+	}
+	if report.Summary.RequestsTotal != 1 {
+		t.Fatalf("requests_total = %d, want 1", report.Summary.RequestsTotal)
+	}
+	if report.Summary.RequestsSucceeded != 1 {
+		t.Fatalf("requests_succeeded = %d, want 1", report.Summary.RequestsSucceeded)
+	}
+	if report.Summary.Providers["groq"].Successes != 1 {
+		t.Fatalf("groq successes = %d, want 1", report.Summary.Providers["groq"].Successes)
+	}
+	if len(report.RecentEvents) != 1 {
+		t.Fatalf("recent events = %d, want 1", len(report.RecentEvents))
 	}
 }
 
