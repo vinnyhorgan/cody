@@ -144,7 +144,7 @@ func runGateway() {
 }
 
 func runOnboard() {
-	fmt.Println("🤖 Cody Setup")
+	fmt.Println("🦔 Cody Setup")
 	fmt.Println("=============")
 
 	cfg, err := loadConfig()
@@ -194,7 +194,7 @@ func runStatus() {
 		os.Exit(1)
 	}
 
-	fmt.Println("🤖 Cody Status")
+	fmt.Println("🦔 Cody Status")
 	fmt.Println()
 
 	// Config file
@@ -352,7 +352,7 @@ Without -m, starts an interactive session.`)
 		}
 	} else {
 		// Interactive mode
-		fmt.Println("🤖 Cody interactive mode (type 'exit' or Ctrl+C to quit)")
+		fmt.Println("🦔 Cody interactive mode (type 'exit' or Ctrl+C to quit)")
 		fmt.Println()
 
 		sig := make(chan os.Signal, 1)

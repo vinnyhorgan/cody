@@ -19,7 +19,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-//go:embed cody.svg
+//go:embed assets/cody.svg
 var codyMascotSVG []byte
 
 // mediaGroupBuffer holds accumulated media group messages.
@@ -140,7 +140,7 @@ func (tb *TelegramBot) handleMessage(msg *tgbotapi.Message) {
 			tb.sendText(chatID, fmt.Sprintf("👋 Hi %s! I'm Cody.\n\nSend me a message and I'll respond!\nType /help to see available commands.", firstName))
 			return
 		case "help":
-			tb.sendText(chatID, "🤖 Cody commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands")
+			tb.sendText(chatID, "🦔 Cody commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands")
 			return
 		}
 	}

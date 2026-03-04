@@ -1,6 +1,6 @@
 # Cody
 
-<img src="./cody.svg" alt="Cody pangolin mascot" width="220" />
+<img src="./assets/cody.svg" alt="Cody pangolin mascot" width="220" />
 
 Cody is your personal AI assistant on Telegram.
 

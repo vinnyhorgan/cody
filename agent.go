@@ -531,7 +531,7 @@ func (cb *ContextBuilder) buildSystemPrompt() string {
 		}(),
 		runtime.GOARCH, runtime.Version())
 
-	identity := fmt.Sprintf(`# Cody 🤖
+	identity := fmt.Sprintf(`# Cody 🦔
 
 You are Cody, a helpful AI assistant.
 

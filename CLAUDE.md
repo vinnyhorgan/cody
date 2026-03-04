@@ -183,6 +183,7 @@ No CGO. Single static binary. Go 1.25+.
 - **Concurrency:** `sync.Mutex` for shared state. Channels for message passing. `context.Context` for cancellation.
 - **Testing:** `httptest.NewServer` for HTTP mocking. `t.TempDir()` for filesystem isolation. Channel-based assertions for async code.
 - **No global state.** Everything passed via constructors or method parameters. Config is threaded through, not global.
+- **Protected folders:** Do not create, edit, move, rename, or delete anything under `skills/` or `templates/` unless the user explicitly grants permission in the current conversation.
 
 ## Hardcoded Values to Know
 
