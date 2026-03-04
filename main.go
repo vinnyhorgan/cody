@@ -17,6 +17,21 @@ import (
 
 const version = "0.1.0"
 
+func executeCronJob(ctx context.Context, agent *AgentLoop, bus *MessageBus, message string, deliver bool, sessionKey, chatID string) string {
+	trimmed := strings.TrimSpace(message)
+	if deliver {
+		if bus == nil || chatID == "" || trimmed == "" {
+			return ""
+		}
+		bus.Outbound <- &OutboundMessage{ChatID: chatID, Content: trimmed}
+		return trimmed
+	}
+	if agent == nil {
+		return ""
+	}
+	return agent.processDirect(ctx, trimmed, sessionKey, chatID)
+}
+
 func main() {
 	cmd := "run"
 	if len(os.Args) > 1 {
@@ -95,14 +110,7 @@ func runGateway() {
 
 	var agent *AgentLoop
 	cronSvc := newCronService(cronPath, func(message string, deliver bool, sessionKey, chatID string) string {
-		if agent == nil {
-			return ""
-		}
-		response := agent.processDirect(ctx, message, sessionKey, chatID)
-		if deliver && chatID != "" && response != "" {
-			bus.Outbound <- &OutboundMessage{ChatID: chatID, Content: response}
-		}
-		return response
+		return executeCronJob(ctx, agent, bus, message, deliver, sessionKey, chatID)
 	})
 
 	agent = newAgentLoop(cfg, llm, bus, sessions, tools, cronSvc)
@@ -554,15 +562,15 @@ func cronAdd() {
 		case "--help", "-h":
 			fmt.Println(`Usage: cody cron add [options]
 
-Options:
-  -n, --name NAME       Job name (required)
-  -m, --message MSG     Message for agent (required)
-  -e, --every N         Run every N seconds
-  -c, --cron EXPR       Cron expression (e.g. '0 9 * * *')
-  --at TIME             One-time at ISO time (e.g. '2025-06-15T10:00:00Z')
-  --tz TIMEZONE         IANA timezone for cron
-	  -d, --deliver         Deliver response to chat
-	  --to CHAT_ID          Target chat ID for delivery`)
+	Options:
+	  -n, --name NAME       Job name (required)
+	  -m, --message MSG     Reminder text or task prompt (required)
+	  -e, --every N         Run every N seconds
+	  -c, --cron EXPR       Cron expression (e.g. '0 9 * * *')
+	  --at TIME             One-time at ISO time (e.g. '2025-06-15T10:00:00Z')
+	  --tz TIMEZONE         IANA timezone for cron
+		  -d, --deliver         Deliver message directly to chat
+		  --to CHAT_ID          Target chat ID for delivery`)
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "Unknown option: %s\n", args[i])
