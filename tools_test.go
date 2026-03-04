@@ -493,6 +493,63 @@ func TestStripHTML(t *testing.T) {
 	}
 }
 
+func TestMarshalJSONResult(t *testing.T) {
+	ok := marshalJSONResult(map[string]any{"ok": true})
+	if ok != `{"ok":true}` {
+		t.Fatalf("marshalJSONResult success = %q", ok)
+	}
+
+	fallback := marshalJSONResult(map[string]any{"bad": func() {}})
+	if fallback != `{"error":"failed to marshal JSON response"}` {
+		t.Fatalf("marshalJSONResult fallback = %q", fallback)
+	}
+}
+
+func TestValidateToolParamsNonObjectSchema(t *testing.T) {
+	errs := validateToolParams(map[string]any{"type": "string"}, map[string]any{})
+	if len(errs) != 1 || !strings.Contains(errs[0], "parameter should be string") {
+		t.Fatalf("unexpected validation errors: %v", errs)
+	}
+}
+
+func TestNumericValue(t *testing.T) {
+	n, ok := numericValue(42, true)
+	if !ok || n != 42 {
+		t.Fatalf("numericValue int = (%v, %v), want (42, true)", n, ok)
+	}
+
+	_, ok = numericValue(42.5, true)
+	if ok {
+		t.Fatal("numericValue should reject non-integer when integer required")
+	}
+
+	n, ok = numericValue(float32(3.5), false)
+	if !ok || n != 3.5 {
+		t.Fatalf("numericValue float32 = (%v, %v), want (3.5, true)", n, ok)
+	}
+
+	_, ok = numericValue("42", false)
+	if ok {
+		t.Fatal("numericValue should reject non-numeric types")
+	}
+}
+
+func TestSchemaStringSlice(t *testing.T) {
+	fromStrings := schemaStringSlice([]string{"a", "b"})
+	if len(fromStrings) != 2 || fromStrings[0] != "a" || fromStrings[1] != "b" {
+		t.Fatalf("schemaStringSlice []string = %v", fromStrings)
+	}
+
+	fromAny := schemaStringSlice([]any{"a", 1, "b"})
+	if len(fromAny) != 2 || fromAny[0] != "a" || fromAny[1] != "b" {
+		t.Fatalf("schemaStringSlice []any = %v", fromAny)
+	}
+
+	if schemaStringSlice(123) != nil {
+		t.Fatal("schemaStringSlice should return nil for unsupported input")
+	}
+}
+
 func TestDangerousPatterns(t *testing.T) {
 	safe := []string{
 		"ls -la",
