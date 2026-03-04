@@ -139,18 +139,18 @@ Memory consolidation is automatic after enough session activity.
 
 Cody ships with 11 built-in tools:
 
-| Tool         | Purpose                                              |
-| ------------ | ---------------------------------------------------- |
-| `read_file`  | Read full file contents                              |
-| `write_file` | Create/overwrite files                               |
-| `edit_file`  | Targeted find/replace edits                          |
-| `list_dir`   | List immediate directory contents                    |
-| `exec`       | Run shell commands with safety checks and timeout    |
-| `web_search` | Search the web (Brave API)                           |
-| `web_fetch`  | Fetch URL content as readable text                   |
-| `message`    | Proactively send progress/result messages            |
-| `cron`       | Add/list/enable/disable/remove scheduled jobs        |
-| `spawn`      | Launch background subagents for longer-running tasks |
+| Tool             | Purpose                                               |
+| ---------------- | ----------------------------------------------------- |
+| `read_file`      | Read full file contents                               |
+| `write_file`     | Create/overwrite files                                |
+| `edit_file`      | Targeted find/replace edits                           |
+| `list_dir`       | List immediate directory contents                     |
+| `exec`           | Run shell commands with safety checks and timeout     |
+| `web_search`     | Search the web (Brave API)                            |
+| `web_fetch`      | Fetch URL content as readable text                    |
+| `message`        | Proactively send progress/result messages             |
+| `cron`           | Add/list/enable/disable/remove scheduled jobs         |
+| `spawn`          | Launch background subagents for longer-running tasks  |
 | `provider_stats` | Inspect live provider-routing stats and recent events |
 
 For `gpt-oss-120b` failover mode, Cody also writes routing telemetry to:
