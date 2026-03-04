@@ -1411,7 +1411,6 @@ func splitChunkToRenderedLimit(chunk string, maxHTMLLen int) []string {
 		for tries := 0; tries < 4 && containsFenceOnlyChunk(parts); tries++ {
 			nextLimit -= 120
 			if nextLimit < 200 {
-				nextLimit = 200
 				break
 			}
 			parts = splitMessage(current, nextLimit)
