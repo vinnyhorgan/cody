@@ -19,6 +19,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const codyCoreIdentitySection = `## Core Identity
+- You are Cody.
+- You are made with love by Vinny.
+- You are based on the Nanobot project.
+- You live at: github.com/vinnyhorgan/cody`
+
 // --- Skills Loader ---
 
 type skillMeta struct {
@@ -573,6 +579,8 @@ func (cb *ContextBuilder) buildSystemPrompt() string {
 
 You are Cody, a helpful AI assistant.
 
+%s
+
 ## Runtime
 %s
 
@@ -592,7 +600,7 @@ Your workspace is at: %s
 - Ask for clarification when the request is ambiguous.
 
 Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel.`,
-		goRuntime, workspacePath, workspacePath, workspacePath, workspacePath, modelIdentity)
+		codyCoreIdentitySection, goRuntime, workspacePath, workspacePath, workspacePath, workspacePath, modelIdentity)
 	parts = append(parts, identity)
 
 	// Load templates from workspace (falling back to embedded)
@@ -806,11 +814,13 @@ func (sm *SubagentManager) buildSubagentPrompt() string {
 
 %s
 
+%s
+
 You are a subagent spawned by the main agent to complete a specific task.
 Stay focused on the assigned task. Your final response will be reported back to the main agent.
 
 ## Workspace
-%s`, runtimeCtx, sm.workspace)}
+%s`, runtimeCtx, codyCoreIdentitySection, sm.workspace)}
 
 	skills := newSkillsLoader(sm.workspace)
 	if summary := skills.buildSummary(); summary != "" {

@@ -344,6 +344,15 @@ func TestContextBuilderSystemPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Cody") {
 		t.Error("system prompt should mention Cody")
 	}
+	if !strings.Contains(prompt, "made with love by Vinny") {
+		t.Error("system prompt should include creator identity")
+	}
+	if !strings.Contains(prompt, "based on the Nanobot project") {
+		t.Error("system prompt should include project lineage")
+	}
+	if !strings.Contains(prompt, "github.com/vinnyhorgan/cody") {
+		t.Error("system prompt should include home repository")
+	}
 	if !strings.Contains(prompt, dir) {
 		t.Error("system prompt should contain workspace path")
 	}
@@ -452,6 +461,26 @@ func TestContextBuilderManagedModelIncludesProviderAwareness(t *testing.T) {
 	}
 	if !strings.Contains(prompt, filepath.Join(tmp, "memory", providerRoutingEventsFilename)) {
 		t.Fatal("system prompt should include provider events file path")
+	}
+}
+
+func TestSubagentPromptIncludesCoreIdentity(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := defaultConfig()
+	bus := newMessageBus()
+	tools := newToolRegistry()
+	ctxBuilder := newContextBuilder(tmp, newMemoryStore(tmp), newSkillsLoader(tmp), "gpt-oss-120b")
+	sm := newSubagentManager(nil, tmp, bus, tools, cfg, ctxBuilder)
+
+	prompt := sm.buildSubagentPrompt()
+	if !strings.Contains(prompt, "made with love by Vinny") {
+		t.Fatal("subagent prompt should include creator identity")
+	}
+	if !strings.Contains(prompt, "based on the Nanobot project") {
+		t.Fatal("subagent prompt should include project lineage")
+	}
+	if !strings.Contains(prompt, "github.com/vinnyhorgan/cody") {
+		t.Fatal("subagent prompt should include home repository")
 	}
 }
 
