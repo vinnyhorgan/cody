@@ -2,9 +2,9 @@
 
 <img src="./assets/cody.svg" alt="Cody pangolin mascot" width="220" />
 
-Cody is your personal AI assistant on Telegram.
+Cody is a personal AI assistant for Telegram that you run yourself.
 
-You message it like a teammate, and it can:
+Think of it as a private teammate in your chat. It can:
 
 - remember long-term context about your work,
 - run shell commands and edit files,
@@ -19,15 +19,15 @@ Scope guardrails:
 - no MCP support
 - no image multimodal input (photos are treated as text context only)
 
-Everything runs from a single self-hosted Go binary, with local plain-text storage you can inspect and edit.
+Everything runs from one self-hosted Go binary, with local plain-text storage you can inspect and edit.
 
-## Why People Like Cody
+## What Cody Tries To Be
 
-- **Simple architecture**: one binary, one codebase, one place to debug.
-- **Telegram-first**: optimized for chat-based workflows.
-- **Practical tooling**: file ops, shell, web, scheduling, and subagents out of the box.
-- **Local-first memory**: stored as readable markdown and JSONL files.
-- **Easy to customize**: personality, instructions, and user profile are editable files.
+- **Personal-first**: built for one user running their own bot.
+- **Easy to reason about**: one binary, one codebase, one place to debug.
+- **Useful in real workflows**: file ops, shell, web, scheduling, and subagents out of the box.
+- **Local and inspectable**: memory is stored as readable markdown and JSONL.
+- **Customizable**: personality and behavior come from editable files in your workspace.
 
 ## Quick Start
 
