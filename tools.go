@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -64,6 +66,9 @@ func (r *ToolRegistry) execute(ctx context.Context, name string, paramsJSON stri
 		if err2 := json.Unmarshal([]byte(repaired), &params); err2 != nil {
 			return fmt.Sprintf("Error: invalid parameters: %v\n\n[Analyze the error above and try a different approach.]", err)
 		}
+	}
+	if errs := validateToolParams(tool.parameters, params); len(errs) > 0 {
+		return fmt.Sprintf("Error: invalid parameters: %s\n\n[Analyze the error above and try a different approach.]", strings.Join(errs, "; "))
 	}
 	result, err := tool.execute(ctx, params)
 	if err != nil {
@@ -129,6 +134,209 @@ func paramInt(params map[string]any, key string) int {
 func paramBool(params map[string]any, key string) bool {
 	v, _ := params[key].(bool)
 	return v
+}
+
+func validateToolParams(schema map[string]any, params map[string]any) []string {
+	if schema == nil {
+		return nil
+	}
+	// Tools in Cody should always declare object schemas.
+	if typ, _ := schema["type"].(string); typ != "" && typ != "object" {
+		return []string{fmt.Sprintf("parameter should be %s", typ)}
+	}
+	return validateSchema(params, schema, "")
+}
+
+func validateSchema(value any, schema map[string]any, path string) []string {
+	typ, _ := schema["type"].(string)
+	label := path
+	if label == "" {
+		label = "parameter"
+	}
+
+	if typ != "" {
+		if !isSchemaType(value, typ) {
+			return []string{fmt.Sprintf("%s should be %s", label, typ)}
+		}
+	}
+
+	var errs []string
+	if enumVals, ok := schema["enum"].([]any); ok && !enumContains(enumVals, value) {
+		errs = append(errs, fmt.Sprintf("%s must be one of %v", label, enumVals))
+	}
+
+	switch typ {
+	case "number", "integer":
+		n, ok := numericValue(value, typ == "integer")
+		if !ok {
+			return []string{fmt.Sprintf("%s should be %s", label, typ)}
+		}
+		if min, ok := numericSchemaValue(schema["minimum"]); ok && n < min {
+			errs = append(errs, fmt.Sprintf("%s must be >= %v", label, min))
+		}
+		if max, ok := numericSchemaValue(schema["maximum"]); ok && n > max {
+			errs = append(errs, fmt.Sprintf("%s must be <= %v", label, max))
+		}
+	case "string":
+		s, _ := value.(string)
+		if min, ok := numericSchemaValue(schema["minLength"]); ok && float64(len(s)) < min {
+			errs = append(errs, fmt.Sprintf("%s must be at least %d chars", label, int(min)))
+		}
+		if max, ok := numericSchemaValue(schema["maxLength"]); ok && float64(len(s)) > max {
+			errs = append(errs, fmt.Sprintf("%s must be at most %d chars", label, int(max)))
+		}
+	case "object":
+		obj, _ := value.(map[string]any)
+		props := schemaMap(schema["properties"])
+		for _, required := range schemaStringSlice(schema["required"]) {
+			if _, ok := obj[required]; !ok {
+				if path == "" {
+					errs = append(errs, fmt.Sprintf("missing required %s", required))
+				} else {
+					errs = append(errs, fmt.Sprintf("missing required %s.%s", path, required))
+				}
+			}
+		}
+		for k, v := range obj {
+			propSchema, ok := props[k]
+			if !ok {
+				continue
+			}
+			childPath := k
+			if path != "" {
+				childPath = path + "." + k
+			}
+			errs = append(errs, validateSchema(v, propSchema, childPath)...)
+		}
+	case "array":
+		arr, _ := value.([]any)
+		itemSchema, ok := schema["items"].(map[string]any)
+		if ok {
+			for i, item := range arr {
+				childPath := fmt.Sprintf("[%d]", i)
+				if path != "" {
+					childPath = fmt.Sprintf("%s[%d]", path, i)
+				}
+				errs = append(errs, validateSchema(item, itemSchema, childPath)...)
+			}
+		}
+	}
+
+	return errs
+}
+
+func isSchemaType(value any, typ string) bool {
+	switch typ {
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "integer":
+		_, ok := numericValue(value, true)
+		return ok
+	case "number":
+		_, ok := numericValue(value, false)
+		return ok
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "array":
+		_, ok := value.([]any)
+		return ok
+	case "object":
+		_, ok := value.(map[string]any)
+		return ok
+	default:
+		return true
+	}
+}
+
+func numericValue(value any, requireInteger bool) (float64, bool) {
+	var n float64
+	switch v := value.(type) {
+	case float64:
+		n = v
+	case float32:
+		n = float64(v)
+	case int:
+		n = float64(v)
+	case int64:
+		n = float64(v)
+	case int32:
+		n = float64(v)
+	case int16:
+		n = float64(v)
+	case int8:
+		n = float64(v)
+	case uint:
+		n = float64(v)
+	case uint64:
+		n = float64(v)
+	case uint32:
+		n = float64(v)
+	case uint16:
+		n = float64(v)
+	case uint8:
+		n = float64(v)
+	default:
+		return 0, false
+	}
+	if requireInteger && math.Trunc(n) != n {
+		return 0, false
+	}
+	return n, true
+}
+
+func numericSchemaValue(value any) (float64, bool) {
+	return numericValue(value, false)
+}
+
+func schemaMap(value any) map[string]map[string]any {
+	out := make(map[string]map[string]any)
+	props, ok := value.(map[string]any)
+	if !ok {
+		return out
+	}
+	for k, raw := range props {
+		if s, ok := raw.(map[string]any); ok {
+			out[k] = s
+		}
+	}
+	return out
+}
+
+func schemaStringSlice(value any) []string {
+	switch v := value.(type) {
+	case []string:
+		return append([]string(nil), v...)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func enumContains(enumVals []any, value any) bool {
+	for _, candidate := range enumVals {
+		if enumValueEqual(candidate, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func enumValueEqual(a, b any) bool {
+	na, oka := numericSchemaValue(a)
+	nb, okb := numericSchemaValue(b)
+	if oka && okb {
+		return na == nb
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 // resolvePath resolves relative paths against workspace and optionally rejects

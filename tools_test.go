@@ -384,6 +384,46 @@ func TestToolRegistry(t *testing.T) {
 	}
 }
 
+func TestToolRegistrySchemaValidation(t *testing.T) {
+	reg := newToolRegistry()
+	reg.register(&AgentTool{
+		name:        "validate_me",
+		description: "validate params",
+		parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action": map[string]any{
+					"type": "string",
+					"enum": []any{"add", "list"},
+				},
+				"count": map[string]any{
+					"type":    "integer",
+					"minimum": 1,
+				},
+			},
+			"required": []string{"action"},
+		},
+		execute: func(ctx context.Context, params map[string]any) (string, error) {
+			return "ok", nil
+		},
+	})
+
+	result := reg.execute(context.Background(), "validate_me", `{}`)
+	if !strings.Contains(result, "missing required action") {
+		t.Fatalf("expected missing required error, got: %s", result)
+	}
+
+	result = reg.execute(context.Background(), "validate_me", `{"action":"bogus"}`)
+	if !strings.Contains(result, "must be one of") {
+		t.Fatalf("expected enum validation error, got: %s", result)
+	}
+
+	result = reg.execute(context.Background(), "validate_me", `{"action":"add","count":0}`)
+	if !strings.Contains(result, "must be >=") {
+		t.Fatalf("expected numeric minimum validation error, got: %s", result)
+	}
+}
+
 func TestToolRegistryExcluding(t *testing.T) {
 	reg := newToolRegistry()
 
