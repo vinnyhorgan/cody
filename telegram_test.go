@@ -275,6 +275,38 @@ func TestSplitMessageForTelegramBalancesFencedCodeBlocks(t *testing.T) {
 	}
 }
 
+func TestSplitMessageForTelegramAvoidsFenceArtifactsNearLimit(t *testing.T) {
+	code1 := "```bash\n" + strings.Repeat("echo hello world\n", 40) + "```\n\n"
+	code2 := "```python\n" + strings.Repeat("print(\"x\", 123)\n", 24) + "```\n"
+	input := strings.Repeat("A", 2775) + "\n\n" + code1 + "More text\n\n" + code2 + "\nAfter block"
+
+	chunks := splitMessageForTelegram(input, 3900)
+	if len(chunks) == 0 {
+		t.Fatalf("expected at least one chunk")
+	}
+
+	for i, chunk := range chunks {
+		trimmed := strings.TrimSpace(chunk)
+		if trimmed == "```" {
+			t.Fatalf("chunk %d should not be only a closing fence: %q", i, chunk)
+		}
+		if strings.HasPrefix(trimmed, "```python\n```") || strings.HasPrefix(trimmed, "```bash\n```") {
+			t.Fatalf("chunk %d should not start with an empty reopened fence block: %q", i, chunk)
+		}
+		if strings.Count(chunk, "```")%2 != 0 {
+			t.Fatalf("chunk %d has unbalanced fenced code block markers: %q", i, chunk)
+		}
+
+		rendered := markdownToTelegramHTML(chunk)
+		if len(rendered) > telegramRenderedHardLimit {
+			t.Fatalf("chunk %d rendered length=%d exceeds hard limit=%d", i, len(rendered), telegramRenderedHardLimit)
+		}
+		if strings.Contains(rendered, "```") {
+			t.Fatalf("chunk %d leaked raw fence markers after rendering: %q", i, rendered)
+		}
+	}
+}
+
 func TestMarkdownToTelegramHTMLCodeBlockWithTableSyntax(t *testing.T) {
 	input := "```\n| Name | Role |\n| ---- | ---- |\n| Ana | Dev |\n```"
 	got := markdownToTelegramHTML(input)

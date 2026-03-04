@@ -1338,10 +1338,16 @@ func splitMessageForTelegram(text string, maxHTMLLen int) []string {
 	if text == "" {
 		return []string{text}
 	}
+	renderedLimit := effectiveTelegramRenderedLimit(maxHTMLLen)
+
 	initial := splitMessage(text, maxHTMLLen)
 	var out []string
 	for _, chunk := range initial {
-		out = append(out, splitChunkToRenderedLimit(chunk, maxHTMLLen)...)
+		if len(markdownToTelegramHTML(chunk)) <= renderedLimit {
+			out = append(out, chunk)
+			continue
+		}
+		out = append(out, splitChunkToRenderedLimit(chunk, renderedLimit)...)
 	}
 
 	// Keep fenced code blocks balanced per chunk so Telegram HTML rendering
@@ -1351,11 +1357,11 @@ func splitMessageForTelegram(text string, maxHTMLLen int) []string {
 		var adjusted []string
 		changed := false
 		for _, chunk := range out {
-			if len(markdownToTelegramHTML(chunk)) <= maxHTMLLen {
+			if len(markdownToTelegramHTML(chunk)) <= renderedLimit {
 				adjusted = append(adjusted, chunk)
 				continue
 			}
-			parts := splitChunkToRenderedLimit(chunk, maxHTMLLen)
+			parts := splitChunkToRenderedLimit(chunk, renderedLimit)
 			if len(parts) > 1 {
 				changed = true
 			}
@@ -1368,6 +1374,15 @@ func splitMessageForTelegram(text string, maxHTMLLen int) []string {
 	}
 
 	return out
+}
+
+const telegramRenderedHardLimit = 4000
+
+func effectiveTelegramRenderedLimit(maxHTMLLen int) int {
+	if maxHTMLLen >= 3900 && maxHTMLLen < telegramRenderedHardLimit {
+		return telegramRenderedHardLimit
+	}
+	return maxHTMLLen
 }
 
 func splitChunkToRenderedLimit(chunk string, maxHTMLLen int) []string {
@@ -1393,6 +1408,14 @@ func splitChunkToRenderedLimit(chunk string, maxHTMLLen int) []string {
 		}
 
 		parts := splitMessage(current, nextLimit)
+		for tries := 0; tries < 4 && containsFenceOnlyChunk(parts); tries++ {
+			nextLimit -= 120
+			if nextLimit < 200 {
+				nextLimit = 200
+				break
+			}
+			parts = splitMessage(current, nextLimit)
+		}
 		if len(parts) < 2 {
 			mid := len(current) / 2
 			if mid == 0 {
@@ -1405,6 +1428,35 @@ func splitChunkToRenderedLimit(chunk string, maxHTMLLen int) []string {
 	}
 
 	return out
+}
+
+func containsFenceOnlyChunk(chunks []string) bool {
+	for _, chunk := range chunks {
+		if isFenceOnlyChunk(chunk) {
+			return true
+		}
+	}
+	return false
+}
+
+func isFenceOnlyChunk(chunk string) bool {
+	trimmed := strings.TrimSpace(chunk)
+	if trimmed == "" {
+		return false
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	switch len(lines) {
+	case 1:
+		_, ok := markdownFenceLang(lines[0])
+		return ok
+	case 2:
+		_, open := markdownFenceLang(lines[0])
+		_, close := markdownFenceLang(lines[1])
+		return open && close
+	default:
+		return false
+	}
 }
 
 func rebalanceFencedCodeChunks(chunks []string) []string {
