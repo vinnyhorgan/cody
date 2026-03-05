@@ -499,7 +499,7 @@ func (c *LLMClient) persistProviderStats(event *ProviderRoutingEvent) {
 			data, err := json.MarshalIndent(report.Summary, "", "  ")
 			if err != nil {
 				slog.Warn("Failed to marshal provider stats", "err", err)
-			} else if err := os.WriteFile(statsPath, append(data, '\n'), 0644); err != nil {
+			} else if err := os.WriteFile(statsPath, append(data, '\n'), 0600); err != nil {
 				slog.Warn("Failed to persist provider stats", "path", statsPath, "err", err)
 			}
 		}
@@ -509,7 +509,7 @@ func (c *LLMClient) persistProviderStats(event *ProviderRoutingEvent) {
 			slog.Warn("Failed to create provider event log directory", "err", err)
 			return
 		}
-		f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			slog.Warn("Failed to open provider event log", "path", eventsPath, "err", err)
 			return

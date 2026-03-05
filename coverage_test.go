@@ -1174,12 +1174,13 @@ func TestChatWithToolChoice(t *testing.T) {
 func TestIsAllowedByUsername(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Telegram.AllowFrom = "johndoe"
+	cfg.Telegram.AllowUserID = ""
 	tb := &TelegramBot{config: cfg}
 
-	if !tb.isAllowed("johndoe") {
+	if !tb.isAllowed(100, "johndoe") {
 		t.Error("expected allowed by username match")
 	}
-	if tb.isAllowed("janedoe") {
+	if tb.isAllowed(100, "janedoe") {
 		t.Error("expected denied for different username")
 	}
 }
@@ -1187,9 +1188,10 @@ func TestIsAllowedByUsername(t *testing.T) {
 func TestIsAllowedCaseInsensitive(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Telegram.AllowFrom = "johndoe"
+	cfg.Telegram.AllowUserID = ""
 	tb := &TelegramBot{config: cfg}
 
-	if !tb.isAllowed("@JohnDoe") {
+	if !tb.isAllowed(100, "@JohnDoe") {
 		t.Error("expected allowed by normalized username")
 	}
 }
@@ -1197,10 +1199,25 @@ func TestIsAllowedCaseInsensitive(t *testing.T) {
 func TestIsAllowedEmptyDenied(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Telegram.AllowFrom = ""
+	cfg.Telegram.AllowUserID = ""
 	tb := &TelegramBot{config: cfg}
 
-	if tb.isAllowed("anyone") {
+	if tb.isAllowed(100, "anyone") {
 		t.Error("expected denied when allow_from is empty")
+	}
+}
+
+func TestIsAllowedByUserIDCoverage(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Telegram.AllowUserID = "777"
+	cfg.Telegram.AllowFrom = "johndoe"
+	tb := &TelegramBot{config: cfg}
+
+	if !tb.isAllowed(777, "someoneelse") {
+		t.Error("expected allowed by user ID match")
+	}
+	if tb.isAllowed(778, "johndoe") {
+		t.Error("expected denied when user ID does not match")
 	}
 }
 

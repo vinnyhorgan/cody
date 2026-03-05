@@ -340,6 +340,36 @@ func TestExecToolDangerousCommands(t *testing.T) {
 	}
 }
 
+func TestExecToolPathGuardWithAllowedDir(t *testing.T) {
+	dir := t.TempDir()
+	tool := makeExecTool(dir, dir, 10, "")
+	ctx := context.Background()
+
+	_, err := tool.execute(ctx, map[string]any{"command": "cat /etc/passwd"})
+	if err == nil {
+		t.Fatal("expected absolute path outside allowed dir to be blocked")
+	}
+	if !strings.Contains(err.Error(), "outside allowed directory") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, err = tool.execute(ctx, map[string]any{"command": "cat ../secret.txt"})
+	if err == nil {
+		t.Fatal("expected path traversal to be blocked")
+	}
+	if !strings.Contains(err.Error(), "path traversal") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	result, err := tool.execute(ctx, map[string]any{"command": "echo ok"})
+	if err != nil {
+		t.Fatalf("unexpected error for safe command: %v", err)
+	}
+	if !strings.Contains(result, "ok") {
+		t.Fatalf("expected safe command output, got %q", result)
+	}
+}
+
 func TestToolRegistry(t *testing.T) {
 	reg := newToolRegistry()
 
@@ -1039,6 +1069,80 @@ func TestCronToolAddMissingFields(t *testing.T) {
 	_, err = tool.execute(context.Background(), map[string]any{"action": "add", "name": "x", "message": "hi"})
 	if err == nil {
 		t.Error("expected error for missing schedule params")
+	}
+}
+
+func TestCronToolAddWithoutChatContextDefaultsToAgentTask(t *testing.T) {
+	dir := t.TempDir()
+	cronSvc := newCronService(filepath.Join(dir, "cron.json"), nil)
+	tool := makeCronTool(cronSvc, &RequestContext{})
+
+	_, err := tool.execute(context.Background(), map[string]any{
+		"action":        "add",
+		"name":          "No Chat",
+		"every_seconds": float64(60),
+		"message":       "do something",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	jobs := cronSvc.listJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+	if jobs[0].Deliver {
+		t.Fatal("expected deliver=false when no chat context exists")
+	}
+	if jobs[0].ChatID != "" {
+		t.Fatalf("chat_id = %q, want empty", jobs[0].ChatID)
+	}
+}
+
+func TestCronToolAddWithChatContextDefaultsToDelivery(t *testing.T) {
+	dir := t.TempDir()
+	cronSvc := newCronService(filepath.Join(dir, "cron.json"), nil)
+	tool := makeCronTool(cronSvc, &RequestContext{ChatID: "chat-42"})
+
+	_, err := tool.execute(context.Background(), map[string]any{
+		"action":        "add",
+		"name":          "With Chat",
+		"every_seconds": float64(60),
+		"message":       "you're cool",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	jobs := cronSvc.listJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+	if !jobs[0].Deliver {
+		t.Fatal("expected deliver=true when chat context exists")
+	}
+	if jobs[0].ChatID != "chat-42" {
+		t.Fatalf("chat_id = %q, want chat-42", jobs[0].ChatID)
+	}
+}
+
+func TestCronToolAddDeliverRequiresChatContext(t *testing.T) {
+	dir := t.TempDir()
+	cronSvc := newCronService(filepath.Join(dir, "cron.json"), nil)
+	tool := makeCronTool(cronSvc, &RequestContext{})
+
+	_, err := tool.execute(context.Background(), map[string]any{
+		"action":        "add",
+		"name":          "No Chat Deliver",
+		"every_seconds": float64(60),
+		"message":       "do something",
+		"deliver":       true,
+	})
+	if err == nil {
+		t.Fatal("expected error when deliver=true has no chat context")
+	}
+	if !strings.Contains(err.Error(), "active chat context") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

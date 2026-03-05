@@ -21,3 +21,14 @@ func executeCronJob(ctx context.Context, agent *AgentLoop, bus *MessageBus, mess
 	}
 	return agent.processDirect(ctx, trimmed, sessionKey, chatID)
 }
+
+func cronResultStatus(result string) string {
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return "empty"
+	}
+	if trimmed == llmUnavailableMessage || strings.HasPrefix(trimmed, "Error:") {
+		return "error"
+	}
+	return "ok"
+}

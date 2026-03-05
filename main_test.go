@@ -47,3 +47,21 @@ func TestExecuteCronJobDeliverMissingChatID(t *testing.T) {
 	default:
 	}
 }
+
+func TestCronResultStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		expect string
+	}{
+		{name: "empty", input: "   ", expect: "empty"},
+		{name: "llm_unavailable", input: llmUnavailableMessage, expect: "error"},
+		{name: "prefixed_error", input: "Error: failed", expect: "error"},
+		{name: "ok_text", input: "all good", expect: "ok"},
+	}
+	for _, tt := range tests {
+		if got := cronResultStatus(tt.input); got != tt.expect {
+			t.Fatalf("%s: cronResultStatus(%q)=%q, want %q", tt.name, tt.input, got, tt.expect)
+		}
+	}
+}

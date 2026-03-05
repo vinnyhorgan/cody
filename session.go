@@ -148,7 +148,7 @@ type SessionManager struct {
 
 func newSessionManager(workspace string) *SessionManager {
 	dir := filepath.Join(workspace, "sessions")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		slog.Warn("Failed to create sessions directory", "err", err)
 	}
 	return &SessionManager{
@@ -181,7 +181,7 @@ func (m *SessionManager) save(s *Session) error {
 	path := filepath.Join(dir, safeFilename(s.Key)+".jsonl")
 	tmpPath := path + ".tmp"
 
-	f, err := os.Create(tmpPath)
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("create session file: %w", err)
 	}

@@ -96,7 +96,10 @@ func (tb *TelegramBot) stop() {
 	}
 }
 
-func (tb *TelegramBot) isAllowed(username string) bool {
+func (tb *TelegramBot) isAllowed(userID int64, username string) bool {
+	if allowedUserID := strings.TrimSpace(tb.config.Telegram.AllowUserID); allowedUserID != "" {
+		return fmt.Sprintf("%d", userID) == allowedUserID
+	}
 	allowed := normalizeTelegramUsername(tb.config.Telegram.AllowFrom)
 	incoming := normalizeTelegramUsername(username)
 	if allowed == "" || incoming == "" {
@@ -117,11 +120,12 @@ func (tb *TelegramBot) handleMessage(msg *tgbotapi.Message) {
 	}
 	chatID := fmt.Sprintf("%d", msg.Chat.ID)
 
-	if !tb.isAllowed(msg.From.UserName) {
+	if !tb.isAllowed(msg.From.ID, msg.From.UserName) {
 		slog.Warn("Telegram: blocked message from unauthorized user",
 			"user_id", msg.From.ID,
 			"username", msg.From.UserName,
-			"allowed_username", tb.config.Telegram.AllowFrom)
+			"allowed_username", tb.config.Telegram.AllowFrom,
+			"allowed_user_id", tb.config.Telegram.AllowUserID)
 		return
 	}
 

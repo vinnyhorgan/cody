@@ -337,6 +337,8 @@ type MemoryStore struct {
 func newMemoryStore(workspace string) *MemoryStore {
 	if err := ensureDir(filepath.Join(workspace, "memory")); err != nil {
 		slog.Warn("Failed to create memory directory", "err", err)
+	} else if err := os.Chmod(filepath.Join(workspace, "memory"), 0700); err != nil {
+		slog.Warn("Failed to harden memory directory permissions", "err", err)
 	}
 	return &MemoryStore{workspace: workspace}
 }
@@ -358,11 +360,11 @@ func (ms *MemoryStore) readMemory() string {
 }
 
 func (ms *MemoryStore) writeMemory(content string) error {
-	return os.WriteFile(ms.memoryPath(), []byte(content), 0644)
+	return os.WriteFile(ms.memoryPath(), []byte(content), 0600)
 }
 
 func (ms *MemoryStore) appendHistory(entry string) error {
-	f, err := os.OpenFile(ms.historyPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(ms.historyPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -692,20 +694,21 @@ type SubagentManager struct {
 	llm       *LLMClient
 	workspace string
 	bus       *MessageBus
-	tools     *ToolRegistry
 	config    *Config
 	context   *ContextBuilder
 	counter   atomic.Int64
 	running   sync.WaitGroup
 	tasks     sync.Map // taskID -> cancelFunc
-	sessions  sync.Map // sessionKey -> []taskID
+	sessionMu sync.Mutex
+	sessions  map[string]map[string]struct{} // sessionKey -> set(taskID)
 }
 
 func newSubagentManager(llm *LLMClient, workspace string, bus *MessageBus,
-	tools *ToolRegistry, config *Config, ctx *ContextBuilder) *SubagentManager {
+	_ *ToolRegistry, config *Config, ctx *ContextBuilder) *SubagentManager {
 	return &SubagentManager{
 		llm: llm, workspace: workspace, bus: bus,
-		tools: tools, config: config, context: ctx,
+		config: config, context: ctx,
+		sessions: make(map[string]map[string]struct{}),
 	}
 }
 
@@ -715,11 +718,13 @@ func (sm *SubagentManager) spawn(task, label, chatID, sessionKey string) string 
 	sm.tasks.Store(id, cancel)
 
 	// Track task under its session for /stop cancellation.
-	if v, ok := sm.sessions.Load(sessionKey); ok {
-		ids := v.([]string)
-		sm.sessions.Store(sessionKey, append(ids, id))
-	} else {
-		sm.sessions.Store(sessionKey, []string{id})
+	if sessionKey != "" {
+		sm.sessionMu.Lock()
+		if sm.sessions[sessionKey] == nil {
+			sm.sessions[sessionKey] = make(map[string]struct{})
+		}
+		sm.sessions[sessionKey][id] = struct{}{}
+		sm.sessionMu.Unlock()
 	}
 
 	sm.running.Add(1)
@@ -727,9 +732,40 @@ func (sm *SubagentManager) spawn(task, label, chatID, sessionKey string) string 
 	return id
 }
 
+func (sm *SubagentManager) removeSessionTask(sessionKey, taskID string) {
+	if sessionKey == "" {
+		return
+	}
+	sm.sessionMu.Lock()
+	defer sm.sessionMu.Unlock()
+	ids := sm.sessions[sessionKey]
+	if ids == nil {
+		return
+	}
+	delete(ids, taskID)
+	if len(ids) == 0 {
+		delete(sm.sessions, sessionKey)
+	}
+}
+
+func (sm *SubagentManager) buildToolRegistry() *ToolRegistry {
+	reg := newToolRegistry()
+	allowedDir := expandHome(sm.config.Tools.AllowedDir)
+	reg.register(makeReadFileTool(sm.workspace, allowedDir))
+	reg.register(makeWriteFileTool(sm.workspace, allowedDir))
+	reg.register(makeEditFileTool(sm.workspace, allowedDir))
+	reg.register(makeListDirTool(sm.workspace, allowedDir))
+	reg.register(makeExecTool(sm.workspace, allowedDir, sm.config.Tools.ExecTimeout, sm.config.Tools.PathAppend))
+	reg.register(makeWebSearchTool())
+	reg.register(makeWebFetchTool())
+	reg.register(makeProviderStatsTool(sm.llm))
+	return reg
+}
+
 func (sm *SubagentManager) run(ctx context.Context, taskID, task, label, chatID, sessionKey string) {
 	defer sm.running.Done()
 	defer sm.tasks.Delete(taskID)
+	defer sm.removeSessionTask(sessionKey, taskID)
 
 	systemPrompt := sm.buildSubagentPrompt()
 
@@ -738,9 +774,10 @@ func (sm *SubagentManager) run(ctx context.Context, taskID, task, label, chatID,
 		{Role: "user", Content: task},
 	}
 
-	// Subagent uses all tools except spawn and message (no recursive spawning,
-	// no direct messaging — results are delivered by the subagent manager).
-	tools := sm.tools.schemasExcluding("spawn", "message")
+	// Subagent uses an isolated tool registry to avoid leaking request-scoped
+	// context from the main agent loop.
+	subTools := sm.buildToolRegistry()
+	tools := subTools.schemas()
 	maxIter := 15
 	var lastContent string
 
@@ -755,7 +792,7 @@ func (sm *SubagentManager) run(ctx context.Context, taskID, task, label, chatID,
 		if len(resp.ToolCalls) > 0 {
 			messages = append(messages, ChatMessage{Role: "assistant", Content: nil, ToolCalls: resp.ToolCalls})
 			for _, tc := range resp.ToolCalls {
-				result := sm.tools.execute(ctx, tc.Function.Name, tc.Function.Arguments)
+				result := subTools.execute(ctx, tc.Function.Name, tc.Function.Arguments)
 				messages = append(messages, ChatMessage{Role: "tool", Content: result, ToolCallID: tc.ID})
 			}
 			continue
@@ -833,13 +870,19 @@ Stay focused on the assigned task. Your final response will be reported back to 
 // cancelBySession cancels all subagents spawned for a given session.
 // Returns the number of tasks cancelled.
 func (sm *SubagentManager) cancelBySession(sessionKey string) int {
-	v, ok := sm.sessions.LoadAndDelete(sessionKey)
-	if !ok {
+	sm.sessionMu.Lock()
+	ids := sm.sessions[sessionKey]
+	if ids != nil {
+		delete(sm.sessions, sessionKey)
+	}
+	sm.sessionMu.Unlock()
+
+	if len(ids) == 0 {
 		return 0
 	}
-	ids := v.([]string)
+
 	n := 0
-	for _, id := range ids {
+	for id := range ids {
 		if cancel, ok := sm.tasks.LoadAndDelete(id); ok {
 			cancel.(context.CancelFunc)()
 			n++
@@ -1151,7 +1194,13 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg *InboundMessage) (st
 
 	// Memory consolidation check
 	if session.unconsolidatedCount() >= a.config.Agent.MemoryWindow {
-		go a.memory.consolidate(context.Background(), a.llm, session, a.config.Agent.MaxTokens, a.config.Agent.MemoryWindow)
+		go func(s *Session) {
+			if ok := a.memory.consolidate(context.Background(), a.llm, s, a.config.Agent.MaxTokens, a.config.Agent.MemoryWindow); ok {
+				if err := a.sessions.save(s); err != nil {
+					slog.Warn("Session save failed after memory consolidation", "session", s.Key, "err", err)
+				}
+			}
+		}(session)
 	}
 
 	return content, nil

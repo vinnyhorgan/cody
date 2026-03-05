@@ -170,7 +170,8 @@ Next steps:
      - cerebras.api_key: Cerebras API key
      - openrouter.api_key: OpenRouter API key
      - telegram.token: Your Telegram bot token (from @BotFather)
-     - telegram.allow_from: "your_telegram_username" (single username, no array)
+     - telegram.allow_user_id: "123456789" (recommended, strict ID check)
+       or telegram.allow_from: "your_telegram_username" (fallback)
      - model: gpt-oss-120b (default, uses automatic failover: groq -> cerebras -> openrouter)
 
   2. Run: cody
@@ -242,6 +243,13 @@ func runStatus() {
 	} else {
 		fmt.Printf("Telegram:  not configured ✗\n")
 	}
+	if cfg.Telegram.AllowUserID != "" {
+		fmt.Printf("Auth:      Telegram user ID locked ✓ (%s)\n", cfg.Telegram.AllowUserID)
+	} else if cfg.Telegram.AllowFrom != "" {
+		fmt.Printf("Auth:      username allowlist ✓ (@%s)\n", cfg.Telegram.AllowFrom)
+	} else {
+		fmt.Printf("Auth:      not configured ✗\n")
+	}
 
 	// Groq voice path
 	if cfg.Groq.APIKey != "" {
@@ -255,6 +263,11 @@ func runStatus() {
 		fmt.Printf("Search:    configured ✓ (Brave Search)\n")
 	} else {
 		fmt.Printf("Search:    not set (web_search disabled)\n")
+	}
+	if dir := strings.TrimSpace(expandHome(cfg.Tools.AllowedDir)); dir != "" {
+		fmt.Printf("Sandbox:   filesystem restricted ✓ (%s)\n", dir)
+	} else {
+		fmt.Printf("Sandbox:   unrestricted ⚠ (tools can access whole filesystem)\n")
 	}
 
 	// Heartbeat
@@ -564,6 +577,10 @@ func cronAdd() {
 		fmt.Fprintln(os.Stderr, "Error: --name, --message, and a schedule (--every, --cron, or --at) are required")
 		os.Exit(1)
 	}
+	if deliver && chatID == "" {
+		fmt.Fprintln(os.Stderr, "Error: --deliver requires --to CHAT_ID")
+		os.Exit(1)
+	}
 
 	svc := newCronService(cronStorePath(), nil)
 	svc.loadStore()
@@ -686,7 +703,7 @@ func cronRun() {
 
 	// Update job state
 	job.State.LastRunAt = time.Now()
-	job.State.LastStatus = "ok"
+	job.State.LastStatus = cronResultStatus(response)
 	svc.saveStore()
 	fmt.Println("✓ Job executed")
 }

@@ -719,7 +719,7 @@ func TestMarkdownBulletListsInsideCodeBlock(t *testing.T) {
 
 func TestIsAllowedEmpty(t *testing.T) {
 	tb := &TelegramBot{config: &Config{}}
-	if tb.isAllowed("anyone") {
+	if tb.isAllowed(123, "anyone") {
 		t.Error("empty allow_from should deny access")
 	}
 }
@@ -729,14 +729,28 @@ func TestIsAllowedMatch(t *testing.T) {
 	cfg.Telegram.AllowFrom = "alice_user"
 	tb := &TelegramBot{config: cfg}
 
-	if !tb.isAllowed("alice_user") {
+	if !tb.isAllowed(123, "alice_user") {
 		t.Error("should allow exact username")
 	}
-	if !tb.isAllowed("@Alice_User") {
+	if !tb.isAllowed(123, "@Alice_User") {
 		t.Error("should allow username with @ prefix and case differences")
 	}
-	if tb.isAllowed("other_user") {
+	if tb.isAllowed(123, "other_user") {
 		t.Error("should reject different username")
+	}
+}
+
+func TestIsAllowedByUserID(t *testing.T) {
+	cfg := &Config{}
+	cfg.Telegram.AllowUserID = "999"
+	cfg.Telegram.AllowFrom = "alice_user"
+	tb := &TelegramBot{config: cfg}
+
+	if !tb.isAllowed(999, "other_user") {
+		t.Error("should allow matching user ID regardless of username")
+	}
+	if tb.isAllowed(1000, "alice_user") {
+		t.Error("should reject non-matching user ID when allow_user_id is set")
 	}
 }
 

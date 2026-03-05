@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
     volumes:
-      - ~/.cody:/root/.cody
+      - ~/.cody:/home/cody/.cody
     restart: unless-stopped
     deploy:
       resources:

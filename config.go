@@ -26,6 +26,7 @@ type Config struct {
 type TelegramConfig struct {
 	Token          string `json:"token"`
 	AllowFrom      string `json:"allow_from"`
+	AllowUserID    string `json:"allow_user_id,omitempty"`
 	ReplyToMessage bool   `json:"reply_to_message"`
 	SendProgress   bool   `json:"send_progress"`
 	SendToolHints  bool   `json:"send_tool_hints"`
@@ -64,6 +65,7 @@ type OpenRouterConfig struct {
 }
 
 var telegramUsernameRe = regexp.MustCompile(`^[A-Za-z0-9_]{5,32}$`)
+var telegramUserIDRe = regexp.MustCompile(`^[0-9]+$`)
 
 func defaultConfig() *Config {
 	return &Config{
@@ -77,6 +79,7 @@ func defaultConfig() *Config {
 		},
 		Tools: ToolsConfig{
 			ExecTimeout: 60,
+			AllowedDir:  "~/.cody/workspace",
 		},
 		Heartbeat: HeartbeatConfig{
 			Enabled:         true,
@@ -142,6 +145,9 @@ func (c *Config) applyEnvFallbacks() {
 	if strings.TrimSpace(c.Telegram.AllowFrom) == "" {
 		c.Telegram.AllowFrom = firstNonEmptyEnv("TELEGRAM_ALLOW_FROM")
 	}
+	if strings.TrimSpace(c.Telegram.AllowUserID) == "" {
+		c.Telegram.AllowUserID = firstNonEmptyEnv("TELEGRAM_ALLOW_USER_ID")
+	}
 	if strings.TrimSpace(c.Groq.APIKey) == "" {
 		c.Groq.APIKey = firstNonEmptyEnv("GROQ_API_KEY")
 	}
@@ -150,6 +156,12 @@ func (c *Config) applyEnvFallbacks() {
 	}
 	if strings.TrimSpace(c.Tools.WebSearchAPIKey) == "" {
 		c.Tools.WebSearchAPIKey = firstNonEmptyEnv("BRAVE_API_KEY")
+	}
+	if strings.TrimSpace(c.Tools.AllowedDir) == "" {
+		c.Tools.AllowedDir = firstNonEmptyEnv("CODY_ALLOWED_DIR")
+	}
+	if strings.TrimSpace(c.Tools.AllowedDir) == "" {
+		c.Tools.AllowedDir = c.Workspace
 	}
 }
 
@@ -181,14 +193,19 @@ func (c *Config) validate() error {
 	if strings.TrimSpace(c.Telegram.Token) == "" {
 		return fmt.Errorf("telegram.token is required")
 	}
+	allowedUserID := strings.TrimSpace(c.Telegram.AllowUserID)
 	allowed := normalizeTelegramUsername(c.Telegram.AllowFrom)
-	if allowed == "" {
-		return fmt.Errorf("telegram.allow_from is required and must be a single Telegram username")
+	if allowedUserID == "" && allowed == "" {
+		return fmt.Errorf("telegram.allow_user_id or telegram.allow_from is required")
 	}
-	if !telegramUsernameRe.MatchString(allowed) {
+	if allowedUserID != "" && !telegramUserIDRe.MatchString(allowedUserID) {
+		return fmt.Errorf("telegram.allow_user_id must be a numeric Telegram user ID")
+	}
+	if allowed != "" && !telegramUsernameRe.MatchString(allowed) {
 		return fmt.Errorf("telegram.allow_from must be a valid Telegram username (5-32 chars: letters, numbers, underscore)")
 	}
 	c.Telegram.AllowFrom = allowed
+	c.Telegram.AllowUserID = allowedUserID
 	return nil
 }
 
@@ -232,10 +249,10 @@ func saveConfig(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(codyDir(), 0755); err != nil {
+	if err := os.MkdirAll(codyDir(), 0700); err != nil {
 		return err
 	}
-	return os.WriteFile(configPath(), append(data, '\n'), 0644)
+	return os.WriteFile(configPath(), append(data, '\n'), 0600)
 }
 
 func expandHome(path string) string {

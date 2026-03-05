@@ -31,6 +31,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Tools.ExecTimeout != 60 {
 		t.Errorf("default exec_timeout = %d, want 60", cfg.Tools.ExecTimeout)
 	}
+	if cfg.Tools.AllowedDir != "~/.cody/workspace" {
+		t.Errorf("default allowed_dir = %q, want ~/.cody/workspace", cfg.Tools.AllowedDir)
+	}
 	if !cfg.Heartbeat.Enabled {
 		t.Error("heartbeat should be enabled by default")
 	}
@@ -91,6 +94,25 @@ func TestConfigValidationManagedGPTOSSRequiresAllProviders(t *testing.T) {
 	cfg.Groq.APIKey = "gsk-test"
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("expected no error with all gpt-oss providers configured, got: %v", err)
+	}
+}
+
+func TestConfigValidationWithAllowUserID(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Telegram.Token = "bot-token"
+	cfg.Telegram.AllowFrom = ""
+	cfg.Telegram.AllowUserID = "123456789"
+	cfg.Groq.APIKey = "gsk-test"
+	cfg.Cerebras.APIKey = "csk-test"
+	cfg.OpenRouter.APIKey = "sk-or-test"
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("expected no error with allow_user_id, got: %v", err)
+	}
+
+	cfg.Telegram.AllowUserID = "not-a-number"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected validation error for non-numeric allow_user_id")
 	}
 }
 
@@ -335,5 +357,36 @@ func TestLoadConfigSupportsOpenRouterEnvFallback(t *testing.T) {
 	}
 	if cfg.OpenRouter.APIKey != "sk-or-test" {
 		t.Errorf("OpenRouter.APIKey = %q, want %q", cfg.OpenRouter.APIKey, "sk-or-test")
+	}
+}
+
+func TestSaveConfigUsesPrivatePermissions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := defaultConfig()
+	cfg.Groq.APIKey = "gsk-test"
+	cfg.Cerebras.APIKey = "csk-test"
+	cfg.OpenRouter.APIKey = "sk-or-test"
+	cfg.Telegram.Token = "token"
+	cfg.Telegram.AllowFrom = "allowed_user"
+	if err := saveConfig(cfg); err != nil {
+		t.Fatalf("saveConfig() error = %v", err)
+	}
+
+	info, err := os.Stat(configPath())
+	if err != nil {
+		t.Fatalf("Stat(configPath) error = %v", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("config mode = %o, want 600", info.Mode().Perm())
+	}
+
+	dirInfo, err := os.Stat(codyDir())
+	if err != nil {
+		t.Fatalf("Stat(codyDir) error = %v", err)
+	}
+	if dirInfo.Mode().Perm() != 0700 {
+		t.Fatalf("config dir mode = %o, want 700", dirInfo.Mode().Perm())
 	}
 }

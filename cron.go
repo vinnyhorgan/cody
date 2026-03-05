@@ -214,10 +214,7 @@ func (cs *CronService) tick() {
 
 			cs.mu.Lock()
 			j.State.LastRunAt = now
-			j.State.LastStatus = "ok"
-			if result == "" {
-				j.State.LastStatus = "empty"
-			}
+			j.State.LastStatus = cronResultStatus(result)
 
 			nextRun, err := computeNextRun(j.Schedule, now)
 			if err != nil {
@@ -261,12 +258,22 @@ func (cs *CronService) saveStore() {
 		slog.Warn("Failed to marshal cron store", "err", err)
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(cs.storePath), 0755); err != nil {
+	dir := filepath.Dir(cs.storePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		slog.Warn("Failed to create cron store directory", "err", err)
 		return
 	}
-	if err := os.WriteFile(cs.storePath, data, 0644); err != nil {
-		slog.Warn("Failed to write cron store", "err", err)
+	if err := os.Chmod(dir, 0700); err != nil {
+		slog.Warn("Failed to harden cron store directory permissions", "err", err)
+	}
+	tmpPath := cs.storePath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		slog.Warn("Failed to write cron tmp store", "err", err)
+		return
+	}
+	if err := os.Rename(tmpPath, cs.storePath); err != nil {
+		slog.Warn("Failed to replace cron store", "err", err)
+		_ = os.Remove(tmpPath)
 	}
 }
 

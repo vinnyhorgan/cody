@@ -1199,6 +1199,35 @@ func TestSubagentSpawnAndWait(t *testing.T) {
 	}
 }
 
+func TestSubagentBuildToolRegistryExcludesContextTools(t *testing.T) {
+	dir := t.TempDir()
+	cfg := defaultConfig()
+	cfg.Workspace = dir
+	llm := newLLMClient("k", "http://localhost", "model")
+	bus := newMessageBus()
+	tools := newToolRegistry()
+	ctxBuilder := newContextBuilder(dir, newMemoryStore(dir), newSkillsLoader(dir), cfg.Model)
+	sm := newSubagentManager(llm, dir, bus, tools, cfg, ctxBuilder)
+
+	reg := sm.buildToolRegistry()
+	schemas := reg.schemas()
+	names := make(map[string]bool, len(schemas))
+	for _, s := range schemas {
+		names[s.Function.Name] = true
+	}
+
+	for _, forbidden := range []string{"message", "spawn", "cron"} {
+		if names[forbidden] {
+			t.Fatalf("subagent registry unexpectedly contains %q", forbidden)
+		}
+	}
+	for _, required := range []string{"read_file", "write_file", "edit_file", "list_dir", "exec", "web_search", "web_fetch"} {
+		if !names[required] {
+			t.Fatalf("subagent registry missing %q", required)
+		}
+	}
+}
+
 func TestSubagentCancelBySession(t *testing.T) {
 	agent, srv := newTestAgentLoopWithSubMgr(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Slow response to allow cancellation
@@ -1220,6 +1249,28 @@ func TestSubagentCancelBySession(t *testing.T) {
 	}
 
 	agent.subMgr.wait()
+}
+
+func TestSubagentSessionTrackingCleanup(t *testing.T) {
+	agent, srv := newTestAgentLoopWithSubMgr(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{
+				Message:      ChatMessage{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	id := agent.subMgr.spawn("quick task", "quick", "chat1", "cleanup-sess")
+	if id == "" {
+		t.Fatal("spawn returned empty id")
+	}
+	agent.subMgr.wait()
+
+	if n := agent.subMgr.cancelBySession("cleanup-sess"); n != 0 {
+		t.Fatalf("cancelBySession after completion = %d, want 0", n)
+	}
 }
 
 func TestNewAgentLoop(t *testing.T) {

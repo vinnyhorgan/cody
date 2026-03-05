@@ -382,7 +382,7 @@ func resolvePath(workspace, path, allowedDir string) (string, error) {
 func registerDefaultTools(reg *ToolRegistry, cfg *Config, workspace string, bus *MessageBus, reqCtx *RequestContext,
 	cronSvc *CronService, subMgr *SubagentManager, llm *LLMClient) {
 
-	allowedDir := cfg.Tools.AllowedDir
+	allowedDir := expandHome(cfg.Tools.AllowedDir)
 
 	reg.register(makeReadFileTool(workspace, allowedDir))
 	reg.register(makeWriteFileTool(workspace, allowedDir))
@@ -559,6 +559,50 @@ var dangerousPatterns = regexp.MustCompile(
 		`:\(\)\s*\{.*\};\s*:|fork\s*bomb)`,
 )
 
+var (
+	winAbsPathRe   = regexp.MustCompile(`[A-Za-z]:\\[^\s"'|><;]+`)
+	posixAbsPathRe = regexp.MustCompile(`(?:^|[\s|>])(/[^\s"'><;]+)`)
+)
+
+func extractAbsolutePaths(command string) []string {
+	var out []string
+	out = append(out, winAbsPathRe.FindAllString(command, -1)...)
+	for _, m := range posixAbsPathRe.FindAllStringSubmatch(command, -1) {
+		if len(m) > 1 {
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+func guardExecPath(command, allowedDir string) error {
+	if strings.TrimSpace(allowedDir) == "" {
+		return nil
+	}
+	if strings.Contains(command, "../") || strings.Contains(command, `..\`) {
+		return fmt.Errorf("command blocked for safety: path traversal detected")
+	}
+
+	baseAbs, err := filepath.Abs(allowedDir)
+	if err != nil {
+		return fmt.Errorf("resolve allowed directory: %w", err)
+	}
+	for _, raw := range extractAbsolutePaths(command) {
+		p := filepath.Clean(raw)
+		if !filepath.IsAbs(p) {
+			continue
+		}
+		pAbs, err := filepath.Abs(p)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(pAbs, baseAbs+string(filepath.Separator)) && pAbs != baseAbs {
+			return fmt.Errorf("command blocked for safety: absolute path outside allowed directory")
+		}
+	}
+	return nil
+}
+
 func makeExecTool(workspace, allowedDir string, timeoutSec int, pathAppend string) *AgentTool {
 	if timeoutSec <= 0 {
 		timeoutSec = 60
@@ -579,6 +623,9 @@ func makeExecTool(workspace, allowedDir string, timeoutSec int, pathAppend strin
 			command := paramStr(params, "command")
 			if dangerousPatterns.MatchString(command) {
 				return "", fmt.Errorf("command blocked for safety: %s", command)
+			}
+			if err := guardExecPath(command, allowedDir); err != nil {
+				return "", err
 			}
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
@@ -1030,12 +1077,21 @@ func makeCronTool(cronSvc *CronService, reqCtx *RequestContext) *AgentTool {
 			case "add":
 				name := paramStr(params, "name")
 				message := paramStr(params, "message")
-				// Match nanobot behavior: cron jobs created via tool calls deliver by default.
-				deliver := true
+				deliver := false
+				deliverExplicit := false
 				if rawDeliver, ok := params["deliver"]; ok {
 					if b, ok := rawDeliver.(bool); ok {
 						deliver = b
+						deliverExplicit = true
 					}
+				}
+				chatID := strings.TrimSpace(reqCtx.ChatID)
+				// Match nanobot behavior: deliver directly when running in a chat context.
+				if !deliverExplicit && chatID != "" {
+					deliver = true
+				}
+				if deliver && chatID == "" {
+					return "", fmt.Errorf("deliver=true requires an active chat context")
 				}
 				tz := paramStr(params, "tz")
 
@@ -1071,7 +1127,7 @@ func makeCronTool(cronSvc *CronService, reqCtx *RequestContext) *AgentTool {
 						return "", fmt.Errorf("invalid timezone %q: %v", tz, err)
 					}
 				}
-				job, err := cronSvc.addJob(name, schedule, message, deliver, tz, reqCtx.ChatID)
+				job, err := cronSvc.addJob(name, schedule, message, deliver, tz, chatID)
 				if err != nil {
 					return "", err
 				}
